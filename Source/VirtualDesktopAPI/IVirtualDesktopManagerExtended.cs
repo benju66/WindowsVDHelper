@@ -29,5 +29,10 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI {
 		bool IsWindowPinned(IntPtr hWnd);
 
 		void SetWindowPinned(IntPtr hWnd, bool pinned);
+
+		// App level pinning: all windows of the app (identified by its app id), including windows opened later
+		bool IsAppPinned(IntPtr hWnd);
+
+		void SetAppPinned(IntPtr hWnd, bool pinned);
 	}
 }

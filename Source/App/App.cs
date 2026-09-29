@@ -552,7 +552,10 @@ namespace WindowsVirtualDesktopHelper {
 
 		private void _recordForegroundWindow(IntPtr hwnd) {
 			var name = Util.OS.GetHandleWndName(hwnd);
-			if(_isUserWindow(hwnd)) _lastUserWindow = hwnd;
+			if(_isUserWindow(hwnd)) {
+				_lastUserWindow = hwnd;
+				if(_getAutoPinApps().Count > 0) _postToUI(() => _applyAutoPin(hwnd));
+			}
 			lock(_fgHistoryLock) {
 				FGWindowHistory.Add(new KeyValuePair<int, string>(Environment.TickCount, name));
 				if(FGWindowHistory.Count > 20) FGWindowHistory.RemoveRange(0, FGWindowHistory.Count - 20);
@@ -708,6 +711,10 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public void MoveWindowToDesktop(IntPtr hwnd, int index) {
+			MoveWindowToDesktop(hwnd, index, Settings.GetBool("feature.moveWindow.follow"));
+		}
+
+		public void MoveWindowToDesktop(IntPtr hwnd, int index, bool follow) {
 			var ext = VDAPIExtended;
 			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return; }
 			if(hwnd == IntPtr.Zero) return;
@@ -719,7 +726,7 @@ namespace WindowsVirtualDesktopHelper {
 				Util.Logging.WriteLine("App: Error: could not move window: " + e.Message);
 				return;
 			}
-			if(Settings.GetBool("feature.moveWindow.follow")) {
+			if(follow) {
 				SwitchToDesktop(index);
 				// Give the moved window the focus again on the new desktop (Windows activates another window
 				// when switching); retried once as the switch animation can still be running
@@ -742,6 +749,184 @@ namespace WindowsVirtualDesktopHelper {
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: could not pin/unpin window: " + e.Message);
 			}
+		}
+
+		// Creates a new desktop and takes the window there (always follows: the point is to continue working with it)
+		public void MoveWindowToNewDesktop(IntPtr hwnd) {
+			var ext = VDAPIExtended;
+			if(ext == null || hwnd == IntPtr.Zero) return;
+			try {
+				var index = ext.CreateDesktop();
+				if(index >= 0) MoveWindowToDesktop(hwnd, index, true);
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not move window to a new desktop: " + e.Message);
+			}
+		}
+
+		public void TogglePinApp(IntPtr hwnd) {
+			var ext = VDAPIExtended;
+			if(ext == null || hwnd == IntPtr.Zero) return;
+			try {
+				var pinned = !ext.IsAppPinned(hwnd);
+				ext.SetAppPinned(hwnd, pinned);
+				var app = Util.OS.GetWindowAppName(hwnd);
+				Util.Logging.WriteLine($"App: {(pinned ? "pinned" : "unpinned")} app \"{app}\"");
+				ShowFeedback(pinned ? $"All {app} windows on all desktops" : $"{app} unpinned");
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not pin/unpin app: " + e.Message);
+			}
+		}
+
+		// Moves all windows of the window's app (same process name) from other desktops to the current desktop
+		public void GatherAppWindows(IntPtr hwnd) {
+			var ext = VDAPIExtended;
+			if(ext == null || hwnd == IntPtr.Zero) return;
+			var processName = Util.OS.GetWindowProcessName(hwnd);
+			if(processName == "") return;
+			var current = (int)this.GetVDDisplayNumber(true);
+			var moved = 0;
+			foreach(var window in Util.OS.GetAppWindows()) {
+				if(!_isUserWindow(window) || !string.Equals(Util.OS.GetWindowProcessName(window), processName, StringComparison.OrdinalIgnoreCase)) continue;
+				try {
+					if(ext.IsWindowPinned(window)) continue;
+					var desktop = ext.GetWindowDesktop(window);
+					if(desktop < 0 || desktop == current) continue;
+					ext.MoveWindowToDesktop(window, current);
+					moved++;
+				} catch(Exception e) {
+					Util.Logging.WriteLine("App: Error: could not move window: " + e.Message);
+				}
+			}
+			var app = Util.OS.GetWindowAppName(hwnd);
+			Util.Logging.WriteLine($"App: gathered {moved} {app} window(s) to desktop {current + 1}");
+			ShowFeedback(moved == 0 ? $"All {app} windows are already here" : $"Brought {moved} {app} window{(moved == 1 ? "" : "s")} here");
+		}
+
+		// ---- Auto pin: apps listed in feature.autoPin.apps are shown on all desktops automatically
+
+		private List<string> _getAutoPinApps() {
+			return (Settings.GetString("feature.autoPin.apps") ?? "").Split(',').Select(a => a.Trim()).Where(a => a != "").ToList();
+		}
+
+		public bool IsAutoPinned(string processName) {
+			return _getAutoPinApps().Any(a => string.Equals(a, processName, StringComparison.OrdinalIgnoreCase) || string.Equals(a + ".exe", processName, StringComparison.OrdinalIgnoreCase));
+		}
+
+		public void SetAutoPinned(IntPtr hwnd, bool autoPin) {
+			var processName = Util.OS.GetWindowProcessName(hwnd);
+			if(processName == "") return;
+			var apps = _getAutoPinApps().Where(a => !string.Equals(a, processName, StringComparison.OrdinalIgnoreCase)).ToList();
+			if(autoPin) apps.Add(processName);
+			Settings.SetString("feature.autoPin.apps", string.Join(", ", apps));
+			try { Settings.SaveConfig(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: saving config: " + e.Message); }
+			var ext = VDAPIExtended;
+			if(ext != null) {
+				try { ext.SetAppPinned(hwnd, autoPin); } catch(Exception e) { Util.Logging.WriteLine("App: Error: could not pin/unpin app: " + e.Message); }
+			}
+		}
+
+		// Pins the app of the window if it is in the auto pin list and not pinned yet
+		private void _applyAutoPin(IntPtr hwnd) {
+			var ext = VDAPIExtended;
+			if(ext == null || !_isUserWindow(hwnd)) return;
+			var processName = Util.OS.GetWindowProcessName(hwnd);
+			if(processName == "" || !IsAutoPinned(processName)) return;
+			try {
+				if(!ext.IsAppPinned(hwnd)) {
+					ext.SetAppPinned(hwnd, true);
+					Util.Logging.WriteLine($"App: auto pinned app \"{processName}\"");
+				}
+			} catch(Exception) {
+				// not an app window which can be pinned
+			}
+		}
+
+		// Applies auto pin to all open windows (at startup and when the list changes)
+		public void ApplyAutoPinToAllWindows() {
+			if(_getAutoPinApps().Count == 0) return;
+			foreach(var window in Util.OS.GetAppWindows()) _applyAutoPin(window);
+		}
+
+		// ---- Mouse wheel over the tray icons
+
+		private Util.TrayMouseWheel _trayMouseWheel = null;
+		private int _lastWheelSwitchTick = 0;
+
+		public void UpdateTrayMouseWheel() {
+			var enabled = Settings.GetBool("feature.mouseWheelOnTrayIcons");
+			if(enabled && _trayMouseWheel == null) {
+				_trayMouseWheel = new Util.TrayMouseWheel(this.AppForm, this.AppForm.notifyIconNumber, this.AppForm.notifyIconName, this.AppForm.notifyIconPrev, this.AppForm.notifyIconNext);
+				_trayMouseWheel.Scrolled += direction => {
+					// One desktop per wheel notch, but not faster than the switch animation
+					if(unchecked(Environment.TickCount - _lastWheelSwitchTick) < 150) return;
+					_lastWheelSwitchTick = Environment.TickCount;
+					if(direction > 0) SwitchDesktopForward();
+					else SwitchDesktopBackward();
+				};
+				if(_trayMouseWheel.Start()) Util.Logging.WriteLine("App: mouse wheel over the tray icons switches desktops");
+				else Util.Logging.WriteLine("App: Error: could not install the mouse hook for the tray mouse wheel");
+			} else if(!enabled && _trayMouseWheel != null) {
+				_trayMouseWheel.Dispose();
+				_trayMouseWheel = null;
+			}
+		}
+
+		// ---- Keyboard shortcuts overview
+
+		// The hotkey which runs the given action, if it was registered successfully, for display in menus
+		public string GetHotKeyForAction(string action) {
+			var hotkey = _keyboardHooksHotKeysAndActions.FirstOrDefault(h => string.Equals(h.Action, action, StringComparison.OrdinalIgnoreCase));
+			if(hotkey == null || _hotKeyConflicts.Contains(hotkey.HotKeyAndAction)) return null;
+			return hotkey.HotKey;
+		}
+
+		public void ShowKeyboardShortcuts() {
+			var lines = new List<string>();
+			lines.Add("Keyboard shortcuts");
+			lines.Add("");
+			var descriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+				{ "DesktopForward", "Next desktop" }, { "DesktopBackward", "Previous desktop (left)" },
+				{ "PreviousDesktop", "Back to the last used desktop" },
+				{ "MoveWindowForward", "Move the active window to the next desktop" }, { "MoveWindowBackward", "Move the active window to the previous desktop" },
+				{ "MoveWindowToNewDesktop", "Move the active window to a new desktop" },
+				{ "TogglePinWindow", "Show the active window on all desktops (toggle)" }, { "TogglePinApp", "Show all windows of the active app on all desktops (toggle)" },
+				{ "GatherAppWindows", "Bring all windows of the active app to this desktop" }, { "NewDesktop", "New desktop" }
+			};
+			var shown = new HashSet<string>();
+			foreach(var hotkey in _keyboardHooksHotKeysAndActions) {
+				var action = hotkey.Action;
+				string description;
+				var status = _hotKeyConflicts.Contains(hotkey.HotKeyAndAction) ? "   [NOT AVAILABLE: used by another app]" : "";
+				if(action.StartsWith("MoveWindowToDesktop", StringComparison.OrdinalIgnoreCase) || (action.StartsWith("Desktop", StringComparison.OrdinalIgnoreCase) && char.IsDigit(action[action.Length - 1]))) {
+					// Collapse the 1..9 variants into one line
+					var isMove = action.StartsWith("MoveWindow", StringComparison.OrdinalIgnoreCase);
+					var keyPrefix = hotkey.HotKey.Substring(0, Math.Max(0, hotkey.HotKey.LastIndexOf('+'))).Trim();
+					var key = (isMove ? "move" : "jump") + keyPrefix;
+					if(!shown.Add(key)) continue;
+					lines.Add($"{keyPrefix} + 1..9".PadRight(34) + (isMove ? "Move the active window to desktop 1..9" : "Jump to desktop 1..9"));
+					continue;
+				}
+				if(!descriptions.TryGetValue(action, out description)) description = action;
+				lines.Add(hotkey.HotKey.PadRight(34) + description + status);
+			}
+			lines.Add("");
+			lines.Add("Built into Windows");
+			lines.Add("");
+			lines.Add("Ctrl + Win + Left/Right".PadRight(34) + "Previous/next desktop");
+			lines.Add("Ctrl + Win + D".PadRight(34) + "New desktop");
+			lines.Add("Ctrl + Win + F4".PadRight(34) + "Close this desktop");
+			lines.Add("Win + Tab".PadRight(34) + "Task View");
+			lines.Add("");
+			lines.Add("Mouse");
+			lines.Add("");
+			if(Settings.GetBool("feature.mouseWheelOnTrayIcons")) lines.Add("Wheel over the tray number".PadRight(34) + "Previous/next desktop");
+			lines.Add("Right-click the tray number".PadRight(34) + "Desktops, windows and options");
+			lines.Add("");
+			lines.Add("Change the shortcuts in the config file (tray menu > Options > Open config folder).");
+			var form = new Forms.LogForm();
+			form.Text = "Keyboard Shortcuts";
+			form.SetLogText(string.Join("\n", lines));
+			form.Show();
 		}
 
 		public void CreateDesktopAndSwitch() {
@@ -806,7 +991,8 @@ namespace WindowsVirtualDesktopHelper {
 			}
 			for(var i = 0; i < names.Count; i++) {
 				var index = i;
-				var item = new ToolStripMenuItem($"{i + 1}    {names[i]}") { Checked = i == current };
+				var jumpKey = GetHotKeyForAction("Desktop" + (i + 1));
+				var item = new ToolStripMenuItem($"{i + 1}    {names[i]}") { Checked = i == current, ShortcutKeyDisplayString = jumpKey };
 				if(i == current) item.Font = new Font(item.Font, FontStyle.Bold);
 				item.Click += (s, e) => SwitchToDesktop(index);
 				items.Add(item);
@@ -814,13 +1000,13 @@ namespace WindowsVirtualDesktopHelper {
 
 			if(ext != null) {
 				items.Add(new ToolStripSeparator());
-				var newItem = new ToolStripMenuItem("New desktop");
+				var newItem = new ToolStripMenuItem("New desktop") { ShortcutKeyDisplayString = "Ctrl + Win + D" };
 				newItem.Click += (s, e) => CreateDesktopAndSwitch();
 				items.Add(newItem);
 				var renameItem = new ToolStripMenuItem("Rename this desktop...");
 				renameItem.Click += (s, e) => RenameCurrentDesktop();
 				items.Add(renameItem);
-				var removeItem = new ToolStripMenuItem("Close this desktop") { Enabled = names.Count > 1 };
+				var removeItem = new ToolStripMenuItem("Close this desktop") { Enabled = names.Count > 1, ShortcutKeyDisplayString = "Ctrl + Win + F4" };
 				removeItem.Click += (s, e) => RemoveCurrentDesktop();
 				items.Add(removeItem);
 
@@ -842,9 +1028,29 @@ namespace WindowsVirtualDesktopHelper {
 					items.Add(moveItem);
 					bool pinned = false;
 					try { pinned = ext.IsWindowPinned(hwnd); } catch(Exception) { }
-					var pinItem = new ToolStripMenuItem($"Show \"{title}\" on all desktops") { Checked = pinned };
+					var pinItem = new ToolStripMenuItem($"Show \"{title}\" on all desktops") { Checked = pinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinWindow") };
 					pinItem.Click += (s, e) => TogglePinWindow(hwnd);
 					items.Add(pinItem);
+					var newDesktopItem = new ToolStripMenuItem($"Move \"{title}\" to a new desktop") { ShortcutKeyDisplayString = GetHotKeyForAction("MoveWindowToNewDesktop") };
+					newDesktopItem.Click += (s, e) => MoveWindowToNewDesktop(hwnd);
+					items.Add(newDesktopItem);
+
+					// App level actions
+					var appName = Util.OS.GetWindowAppName(hwnd).Replace("&", "&&");
+					var processName = Util.OS.GetWindowProcessName(hwnd);
+					if(appName != "") {
+						bool appPinned = false;
+						try { appPinned = ext.IsAppPinned(hwnd); } catch(Exception) { }
+						var pinAppItem = new ToolStripMenuItem($"Show all {appName} windows on all desktops") { Checked = appPinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinApp") };
+						pinAppItem.Click += (s, e) => TogglePinApp(hwnd);
+						items.Add(pinAppItem);
+						var autoPinItem = new ToolStripMenuItem($"Always show {appName} on all desktops") { Checked = IsAutoPinned(processName) };
+						autoPinItem.Click += (s, e) => SetAutoPinned(hwnd, !IsAutoPinned(processName));
+						items.Add(autoPinItem);
+						var gatherItem = new ToolStripMenuItem($"Bring all {appName} windows here") { ShortcutKeyDisplayString = GetHotKeyForAction("GatherAppWindows") };
+						gatherItem.Click += (s, e) => GatherAppWindows(hwnd);
+						items.Add(gatherItem);
+					}
 				}
 
 				// Checklist of all open windows, to pin several windows in one go
@@ -854,9 +1060,13 @@ namespace WindowsVirtualDesktopHelper {
 
 			// Quick options
 			items.Add(new ToolStripSeparator());
+			var shortcutsItem = new ToolStripMenuItem("Keyboard shortcuts...");
+			shortcutsItem.Click += (s, e) => ShowKeyboardShortcuts();
+			items.Add(shortcutsItem);
 			var options = new ToolStripMenuItem("Options");
 			options.DropDownItems.Add(_optionMenuItem("Wrap around at first/last desktop", "feature.wrapAround"));
 			options.DropDownItems.Add(_optionMenuItem("Color the desktop number per desktop", "feature.colorIconsPerDesktop"));
+			options.DropDownItems.Add(_optionMenuItem("Mouse wheel over the tray icons switches desktops", "feature.mouseWheelOnTrayIcons"));
 			if(ext != null) options.DropDownItems.Add(_optionMenuItem("Switch along when moving a window", "feature.moveWindow.follow"));
 			options.DropDownItems.Add(new ToolStripSeparator());
 			var openConfig = new ToolStripMenuItem("Open config folder");
@@ -987,6 +1197,8 @@ namespace WindowsVirtualDesktopHelper {
 			try { SetupHotKeys(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: hotkeys: " + e.Message); }
 			try { UIUpdate(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: icons: " + e.Message); }
 			try { UpdateStatusOverlayWindows(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: status overlay: " + e.Message); }
+			try { UpdateTrayMouseWheel(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: tray mouse wheel: " + e.Message); }
+			try { ApplyAutoPinToAllWindows(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: auto pin: " + e.Message); }
 			try { if(Settings.GetBool("feature.useShellNotifications") != _vdNotificationsActive) StartVDNotifications(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: notifications: " + e.Message); }
 			try { if(this.SettingsForm != null && !this.SettingsForm.IsDisposed) this.SettingsForm.ReloadFromSettings(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: settings window: " + e.Message); }
 		}
@@ -1004,7 +1216,8 @@ namespace WindowsVirtualDesktopHelper {
 			// - PreviousDesktop
 			// - Desktop1...Desktop99
 			// - MoveWindowForward, MoveWindowBackward, MoveWindowToDesktop1...MoveWindowToDesktop99 (Windows 11 24H2+)
-			// - TogglePinWindow (Windows 11 24H2+)
+			// - TogglePinWindow, TogglePinApp (Windows 11 24H2+)
+			// - MoveWindowToNewDesktop, GatherAppWindows (Windows 11 24H2+)
 			// - NewDesktop (Windows 11 24H2+)
 			try {
 
@@ -1028,6 +1241,15 @@ namespace WindowsVirtualDesktopHelper {
 					int target;
 					if(!int.TryParse(action.Replace("movewindowtodesktop", ""), out target)) throw new Exception("invalid desktop number");
 					this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1);
+					return null;
+				} else if(action == "togglepinapp") {
+					this.TogglePinApp(this.GetActiveUserWindow(true));
+					return null;
+				} else if(action == "movewindowtonewdesktop") {
+					this.MoveWindowToNewDesktop(this.GetActiveUserWindow(true));
+					return null;
+				} else if(action == "gatherappwindows") {
+					this.GatherAppWindows(this.GetActiveUserWindow(true));
 					return null;
 				} else if(action == "togglepinwindow") {
 					this.TogglePinWindow(this.GetActiveUserWindow(true));
@@ -1118,6 +1340,9 @@ namespace WindowsVirtualDesktopHelper {
 				_addFeatureHotKey(hotkeys, "feature.useHotKeyToMoveWindowForward", "MoveWindowForward");
 				_addFeatureHotKey(hotkeys, "feature.useHotKeyToMoveWindowBackward", "MoveWindowBackward");
 				_addFeatureHotKey(hotkeys, "feature.useHotKeyToTogglePinWindow", "TogglePinWindow");
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToTogglePinApp", "TogglePinApp");
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToMoveWindowToNewDesktop", "MoveWindowToNewDesktop");
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToGatherAppWindows", "GatherAppWindows");
 				if(Settings.GetBool("feature.useHotKeyToMoveWindowToDesktopNumber")) {
 					var hotKey = Settings.GetString("feature.useHotKeyToMoveWindowToDesktopNumber.hotkey");
 					if(!string.IsNullOrWhiteSpace(hotKey)) {

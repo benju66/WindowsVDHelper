@@ -94,6 +94,17 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation {
 			else Desktop.UnpinWindow(hWnd);
 		}
 
+		public bool IsAppPinned(IntPtr hWnd) {
+			if (DesktopManager.VirtualDesktopPinnedApps == null || DesktopManager.ApplicationViewCollection == null) throw new NotSupportedException("the pinning API is not available");
+			return Desktop.IsApplicationPinned(hWnd);
+		}
+
+		public void SetAppPinned(IntPtr hWnd, bool pinned) {
+			if (DesktopManager.VirtualDesktopPinnedApps == null || DesktopManager.ApplicationViewCollection == null) throw new NotSupportedException("the pinning API is not available");
+			if (pinned) Desktop.PinApplication(hWnd);
+			else Desktop.UnpinApplication(hWnd);
+		}
+
 		#endregion
 
 		#region API

@@ -121,6 +121,7 @@
     <Compile Include="Util\Emoji.cs" />
     <Compile Include="Util\Icons.cs" />
     <Compile Include="Util\Prompt.cs" />
+    <Compile Include="Util\TrayMouseWheel.cs" />
     <Compile Include="VirtualDesktopAPI\Notifications.cs" />
     <Compile Include="VirtualDesktopAPI\IVirtualDesktopManagerExtended.cs" />
     <Compile Include="Util\Logging.cs" />

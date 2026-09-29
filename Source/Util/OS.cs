@@ -107,6 +107,38 @@ namespace WindowsVirtualDesktopHelper.Util {
 			return windows;
 		}
 
+		// Process name (without .exe) of the process owning the window, e.g. "Spotify", or "" if unknown.
+		// Cached per process id, as this is called for every foreground change (auto pin).
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>> _processInfoCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>>();
+
+		public static string GetWindowProcessName(IntPtr hWnd) {
+			return _getWindowProcessInfo(hWnd).Item1;
+		}
+
+		// A friendly app name for menus, e.g. "Microsoft Teams" (the exe's description), falling back to the process name
+		public static string GetWindowAppName(IntPtr hWnd) {
+			var info = _getWindowProcessInfo(hWnd);
+			return string.IsNullOrWhiteSpace(info.Item2) ? info.Item1 : info.Item2;
+		}
+
+		private static Tuple<string, string> _getWindowProcessInfo(IntPtr hWnd) {
+			uint pid;
+			GetWindowThreadProcessId(hWnd, out pid);
+			if (pid == 0) return Tuple.Create("", "");
+			return _processInfoCache.GetOrAdd(pid, id => {
+				try {
+					using (var process = System.Diagnostics.Process.GetProcessById((int)id)) {
+						var name = process.ProcessName;
+						string description = null;
+						try { description = process.MainModule.FileVersionInfo.FileDescription; } catch (Exception) { /* e.g. elevated process */ }
+						return Tuple.Create(name, description ?? "");
+					}
+				} catch (Exception) {
+					return Tuple.Create("", "");
+				}
+			});
+		}
+
 		#endregion
 
 		#region DPI

@@ -88,12 +88,12 @@ namespace WindowsVirtualDesktopHelper {
 			RegisterDefault("feature.showDesktopStatusOverlay.position", "topcenter");
 
 			// Feature: useHotKeyToJumpToDesktopNumber
-			RegisterDefault("feature.useHotKeyToJumpToDesktopNumber", false);
-			RegisterDefault("feature.useHotKeyToJumpToDesktopNumber.hotkey", "Alt");
+			RegisterDefault("feature.useHotKeyToJumpToDesktopNumber", true, "Jump to desktop 1..9 with the hotkey + number");
+			RegisterDefault("feature.useHotKeyToJumpToDesktopNumber.hotkey", "Ctrl + Alt");
 
 			// Feature: useHotKeyToJumpToPreviousDesktop
-			RegisterDefault("feature.useHotKeyToJumpToPreviousDesktop", false);
-			RegisterDefault("feature.useHotKeyToJumpToPreviousDesktop.hotkey", "Alt + Tilde");
+			RegisterDefault("feature.useHotKeyToJumpToPreviousDesktop", true, "Jump back to the previously used desktop");
+			RegisterDefault("feature.useHotKeyToJumpToPreviousDesktop.hotkey", "Ctrl + Alt + Tilde");
 
 			// Feature: useHotKeyToSwitchDesktopForward
 			RegisterDefault("feature.useHotKeyToSwitchDesktopForward", false);
@@ -108,13 +108,29 @@ namespace WindowsVirtualDesktopHelper {
 			RegisterDefault("feature.useHotKeyToMoveWindowForward.hotkey", "Ctrl + Shift + Win + Right");
 			RegisterDefault("feature.useHotKeyToMoveWindowBackward", true, "Move the active window to the previous desktop", "v2.2");
 			RegisterDefault("feature.useHotKeyToMoveWindowBackward.hotkey", "Ctrl + Shift + Win + Left");
-			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber", false, "Move the active window to desktop 1..9 with the hotkey + number", "v2.2");
-			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber.hotkey", "Ctrl + Shift + Win");
+			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber", true, "Move the active window to desktop 1..9 with the hotkey + number", "v2.2");
+			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber.hotkey", "Ctrl + Alt + Shift");
 			RegisterDefault("feature.moveWindow.follow", true, "true - after moving a window to another desktop, switch to that desktop too; false - stay", "v2.2");
 
 			// Feature: pin the active window to all desktops (Windows 11 24H2+)
 			RegisterDefault("feature.useHotKeyToTogglePinWindow", true, "Pin/unpin the active window to all desktops", "v2.2");
 			RegisterDefault("feature.useHotKeyToTogglePinWindow.hotkey", "Ctrl + Shift + Win + P");
+			RegisterDefault("feature.useHotKeyToTogglePinApp", true, "Pin/unpin all windows of the active app to all desktops (also windows it opens later)", "v2.2");
+			RegisterDefault("feature.useHotKeyToTogglePinApp.hotkey", "Ctrl + Shift + Win + A");
+
+			// Feature: take the active window to a new desktop
+			RegisterDefault("feature.useHotKeyToMoveWindowToNewDesktop", true, "Create a new desktop and move the active window there", "v2.2");
+			RegisterDefault("feature.useHotKeyToMoveWindowToNewDesktop.hotkey", "Ctrl + Shift + Win + N");
+
+			// Feature: bring all windows of the active app to the current desktop
+			RegisterDefault("feature.useHotKeyToGatherAppWindows", true, "Move all windows of the active app from other desktops to the current desktop", "v2.2");
+			RegisterDefault("feature.useHotKeyToGatherAppWindows.hotkey", "Ctrl + Shift + Win + G");
+
+			// Feature: apps which are always shown on all desktops
+			RegisterDefault("feature.autoPin.apps", "", "Comma separated process names (e.g. \"Spotify, ms-teams\") of apps which are automatically shown on all desktops", "v2.2");
+
+			// Feature: mouse wheel over the tray icons switches desktops
+			RegisterDefault("feature.mouseWheelOnTrayIcons", true, "Scroll the mouse wheel over the tray icons to switch desktops", "v2.2");
 
 			// Feature: wrap around when switching forward/backward past the last/first desktop
 			RegisterDefault("feature.wrapAround", false, "If enabled, switching forward on the last desktop goes to the first (and backward on the first to the last)", "v2.2");
