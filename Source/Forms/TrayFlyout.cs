@@ -215,7 +215,7 @@ namespace WindowsVirtualDesktopHelper {
 			footer.Controls.Add(new Label { Text = $"Desktop {_current + 1} of {_names.Count}", AutoSize = true, ForeColor = FlyoutColors.TextMuted, Location = new Point(0, S(12)) });
 			var buttons = new[] {
 				Tuple.Create("", "Keyboard shortcuts", (Action)(() => CloseThen(App.Instance.ShowKeyboardShortcuts))),
-				Tuple.Create("", "Settings", (Action)(() => CloseThen(App.Instance.ShowSettings))),
+				Tuple.Create("", "Settings", (Action)(() => CloseThen(() => App.Instance.ShowSettings()))),
 				Tuple.Create("", "Exit", (Action)(() => CloseThen(App.Instance.Exit))),
 			};
 			for (var i = 0; i < buttons.Length; i++) {

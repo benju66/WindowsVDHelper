@@ -25,7 +25,7 @@ namespace WindowsVirtualDesktopHelper {
 		public string CurrentVDDisplayName = null;
 		public uint CurrentVDDisplayNumber = 0;
 		public int CurrentVDDisplayCount = 1;
-		public SettingsForm SettingsForm;
+		public Forms.SettingsWindow SettingsForm; // created when first shown
 		public AppForm AppForm;
 		public string CurrentSystemThemeName = null;
 		public static string DetectedVDImplementation = null;
@@ -85,8 +85,6 @@ namespace WindowsVirtualDesktopHelper {
 			// Create the app form, which acts as our ui main thread (we need such a main thread form for many of the win api calls)
 			this.AppForm = new AppForm();
 
-			// Create settings form
-			this.SettingsForm = new SettingsForm();
 
 			// Hot keys
 			this.SetupHotKeys();
@@ -921,53 +919,7 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public void ShowKeyboardShortcuts() {
-			var lines = new List<string>();
-			lines.Add("Keyboard shortcuts");
-			lines.Add("");
-			var descriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
-				{ "DesktopForward", "Next desktop" }, { "DesktopBackward", "Previous desktop (left)" },
-				{ "PreviousDesktop", "Back to the last used desktop" },
-				{ "MoveWindowForward", "Move the active window to the next desktop" }, { "MoveWindowBackward", "Move the active window to the previous desktop" },
-				{ "MoveWindowToNewDesktop", "Move the active window to a new desktop" },
-				{ "TogglePinWindow", "Show the active window on all desktops (toggle)" }, { "TogglePinApp", "Show all windows of the active app on all desktops (toggle)" },
-				{ "GatherAppWindows", "Bring all windows of the active app to this desktop" }, { "ShowWindowMenu", "Window menu for the active window (at the mouse cursor)" }, { "NewDesktop", "New desktop" }
-			};
-			var shown = new HashSet<string>();
-			foreach(var hotkey in _keyboardHooksHotKeysAndActions) {
-				var action = hotkey.Action;
-				string description;
-				var status = _hotKeyConflicts.Contains(hotkey.HotKeyAndAction) ? "   [NOT AVAILABLE: used by another app]" : "";
-				if(action.StartsWith("MoveWindowToDesktop", StringComparison.OrdinalIgnoreCase) || (action.StartsWith("Desktop", StringComparison.OrdinalIgnoreCase) && char.IsDigit(action[action.Length - 1]))) {
-					// Collapse the 1..9 variants into one line
-					var isMove = action.StartsWith("MoveWindow", StringComparison.OrdinalIgnoreCase);
-					var keyPrefix = hotkey.HotKey.Substring(0, Math.Max(0, hotkey.HotKey.LastIndexOf('+'))).Trim();
-					var key = (isMove ? "move" : "jump") + keyPrefix;
-					if(!shown.Add(key)) continue;
-					lines.Add($"{keyPrefix} + 1..9".PadRight(34) + (isMove ? "Move the active window to desktop 1..9" : "Jump to desktop 1..9"));
-					continue;
-				}
-				if(!descriptions.TryGetValue(action, out description)) description = action;
-				lines.Add(hotkey.HotKey.PadRight(34) + description + status);
-			}
-			lines.Add("");
-			lines.Add("Built into Windows");
-			lines.Add("");
-			lines.Add("Ctrl + Win + Left/Right".PadRight(34) + "Previous/next desktop");
-			lines.Add("Ctrl + Win + D".PadRight(34) + "New desktop");
-			lines.Add("Ctrl + Win + F4".PadRight(34) + "Close this desktop");
-			lines.Add("Win + Tab".PadRight(34) + "Task View");
-			lines.Add("");
-			lines.Add("Mouse");
-			lines.Add("");
-			if(Settings.GetBool("feature.mouseWheelOnTrayIcons")) lines.Add("Wheel over the tray number".PadRight(34) + "Previous/next desktop");
-			lines.Add("Right-click the tray number".PadRight(34) + "Desktops, windows and options");
-			if(Settings.GetBool("feature.windowMenu.titleBarCtrlRightClick")) lines.Add("Ctrl + right-click a title bar".PadRight(34) + "Window menu for that window");
-			lines.Add("");
-			lines.Add("Change the shortcuts in the config file (tray menu > Options > Open config folder).");
-			var form = new Forms.LogForm();
-			form.Text = "Keyboard Shortcuts";
-			form.SetLogText(string.Join("\n", lines));
-			form.Show();
+			ShowSettings(Forms.SettingsWindow.PageShortcuts);
 		}
 
 		public void CreateDesktopAndSwitch() {
@@ -1788,6 +1740,8 @@ namespace WindowsVirtualDesktopHelper {
 			_postToUI(() => {
 				this.UIUpdateIcons();
 				this.UpdateStatusOverlayWindows(); // re-created with the new theme colors
+				// An open settings window is re-created in the new colors, on the same page
+				if(this.SettingsForm != null && !this.SettingsForm.IsDisposed && this.SettingsForm.Visible && this.SettingsForm.IsOutdated) ShowSettings(null);
 			});
 		}
 
@@ -1942,14 +1896,29 @@ namespace WindowsVirtualDesktopHelper {
 		#region Forms and Windows
 
 		public void ShowAbout() {
-			this.AppForm.Invoke((Action)(() => {
-				var form = new AboutForm();
-				form.Show();
-			}));
+			ShowSettings(Forms.SettingsWindow.PageAbout);
 		}
 
-		public void ShowSettings() {
+		// Opens the settings window (optionally on a page) and brings it to the front. The window is re-created
+		// when the theme changed since it was built.
+		public void ShowSettings(string page = null) {
+			if(this.AppForm.InvokeRequired) {
+				this.AppForm.BeginInvoke((Action)(() => ShowSettings(page)));
+				return;
+			}
+			if(this.SettingsForm != null && !this.SettingsForm.IsDisposed && this.SettingsForm.IsOutdated) {
+				this.SettingsForm.Close();
+				this.SettingsForm = null;
+			}
+			if(this.SettingsForm == null || this.SettingsForm.IsDisposed) {
+				this.SettingsForm = new Forms.SettingsWindow();
+				this.SettingsForm.FormClosed += (s, e) => { if(Settings.HasUnsavedChanges) try { Settings.SaveConfig(); } catch(Exception) { } };
+			}
+			if(page != null) this.SettingsForm.ShowPage(page);
 			this.SettingsForm.Show();
+			if(this.SettingsForm.WindowState == FormWindowState.Minimized) this.SettingsForm.WindowState = FormWindowState.Normal;
+			this.SettingsForm.Activate();
+			Util.OS.ActivateWindow(this.SettingsForm.Handle);
 		}
 
 		public void ShowSplash() {

@@ -72,12 +72,6 @@
     <SignAssembly>false</SignAssembly>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Forms\AboutForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Forms\AboutForm.Designer.cs">
-      <DependentUpon>AboutForm.cs</DependentUpon>
-    </Compile>
     <Compile Include="App\App.cs" />
     <Compile Include="AssemblyInfo.cs" />
     <Compile Include="Forms\ErrorForm.cs">
@@ -85,12 +79,6 @@
     </Compile>
     <Compile Include="Forms\ErrorForm.Designer.cs">
       <DependentUpon>ErrorForm.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Forms\LogForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Forms\LogForm.Designer.cs">
-      <DependentUpon>LogForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\AppForm.cs">
       <SubType>Form</SubType>
@@ -106,12 +94,6 @@
     </Compile>
     <Compile Include="Main.cs" />
     <Compile Include="App\Settings.cs" />
-    <Compile Include="Forms\SettingsForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Forms\SettingsForm.Designer.cs">
-      <DependentUpon>SettingsForm.cs</DependentUpon>
-    </Compile>
     <Compile Include="Forms\SwitchNotificationForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -124,13 +106,14 @@
     <Compile Include="App\ControlServer.cs" />
     <Compile Include="Util\WindowIcons.cs" />
     <Compile Include="Util\ModernMenu.cs" />
+    <Compile Include="Forms\ModernUI.cs" />
+    <Compile Include="Forms\SettingsWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\TrayFlyout.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Util\TitleBarMenuHook.cs" />
-    <Compile Include="Forms\SettingsForm.Tabs.cs">
-      <DependentUpon>SettingsForm.cs</DependentUpon>
-    </Compile>
     <Compile Include="Util\TrayMouseWheel.cs" />
     <Compile Include="VirtualDesktopAPI\Notifications.cs" />
     <Compile Include="VirtualDesktopAPI\IVirtualDesktopManagerExtended.cs" />
@@ -198,20 +181,11 @@
     <None Include="app.config" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Forms\AboutForm.resx">
-      <DependentUpon>AboutForm.cs</DependentUpon>
-    </EmbeddedResource>
     <EmbeddedResource Include="Forms\ErrorForm.resx">
       <DependentUpon>ErrorForm.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource Include="Forms\LogForm.resx">
-      <DependentUpon>LogForm.cs</DependentUpon>
-    </EmbeddedResource>
     <EmbeddedResource Include="Forms\AppForm.resx">
       <DependentUpon>AppForm.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Forms\SettingsForm.resx">
-      <DependentUpon>SettingsForm.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Forms\OverlayForm.resx">
       <DependentUpon>OverlayForm.cs</DependentUpon>
