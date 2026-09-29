@@ -25,6 +25,7 @@
     <!-- The .resx files are converted to .resources by resgen\ (see build-local.ps1) -->
     <EmbeddedResource Include="obj\res\*.resources" LogicalName="WindowsVirtualDesktopHelper.%(Filename).resources" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Configuration" />
     <Reference Include="System.Core" />

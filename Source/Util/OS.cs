@@ -225,6 +225,27 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 		#endregion
 
+		[DllImport("user32.dll")]
+		private static extern bool IsIconic(IntPtr hWnd);
+
+		[DllImport("user32.dll")]
+		private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+		[DllImport("user32.dll")]
+		private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+		// Brings a window to the front, restoring it if minimized. Windows only lets the foreground process
+		// set the foreground window; a (harmless) Alt key press lifts that restriction for this call
+		public static void ActivateWindow(IntPtr hWnd) {
+			if (!IsWindow(hWnd)) return;
+			if (IsIconic(hWnd)) ShowWindow(hWnd, 9); // SW_RESTORE
+			const byte VK_MENU = 0x12;
+			const uint KEYEVENTF_KEYUP = 0x2;
+			keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+			keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+			SetForegroundWindow(hWnd);
+		}
+
 		#region Invoking Windows Features
 
 		public static void OpenTaskView() {

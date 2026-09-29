@@ -121,6 +121,7 @@
     <Compile Include="Util\Emoji.cs" />
     <Compile Include="Util\Icons.cs" />
     <Compile Include="Util\Prompt.cs" />
+    <Compile Include="App\ControlServer.cs" />
     <Compile Include="Forms\SettingsForm.Tabs.cs">
       <DependentUpon>SettingsForm.cs</DependentUpon>
     </Compile>
@@ -183,6 +184,7 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>

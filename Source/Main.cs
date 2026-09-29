@@ -7,6 +7,13 @@ namespace WindowsVirtualDesktopHelper {
 
 		[STAThread]
 		public static void Main(string[] args) {
+			// "--action X", "--switch N" and "--send {json}" control the running instance and exit
+			var remoteExitCode = ControlServer.RunCommandLine(args);
+			if (remoteExitCode != null) {
+				Environment.Exit(remoteExitCode.Value);
+				return;
+			}
+
 			// Catch all exceptions in global exception handler
 			try {
 				// Settings

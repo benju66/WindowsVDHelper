@@ -95,6 +95,7 @@ namespace WindowsVirtualDesktopHelper {
 			App.Instance.UIUpdate();
 
 			App.Instance.StartConfigWatcher();
+			ControlServer.Start();
 			App.Instance.UpdateTrayMouseWheel();
 			try { App.Instance.ApplyAutoPinToAllWindows(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error applying auto pin: " + ex.Message); }
 			App.Instance.NotifyHotKeyConflicts();

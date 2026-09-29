@@ -678,9 +678,19 @@ namespace WindowsVirtualDesktopHelper {
 			"ForegroundStaging", "MultitaskingViewFrame", "TaskListThumbnailWnd"
 		};
 
+		// Launchers which take the focus while the user picks a command: the window "being worked in" is the one before
+		private static readonly HashSet<string> _launcherProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+			"Microsoft.CmdPal.UI", "PowerToys.PowerLauncher"
+		};
+
+		public bool IsUserWindow(IntPtr hwnd) {
+			return _isUserWindow(hwnd);
+		}
+
 		private bool _isUserWindow(IntPtr hwnd) {
 			if(hwnd == IntPtr.Zero || !Util.OS.IsWindow(hwnd)) return false;
 			if(_shellWindowClasses.Contains(Util.OS.GetHandleWndType(hwnd))) return false;
+			if(_launcherProcesses.Contains(Util.OS.GetWindowProcessName(hwnd))) return false;
 			if(string.IsNullOrWhiteSpace(Util.OS.GetHandleWndName(hwnd))) return false;
 			uint pid;
 			Util.OS.GetWindowThreadProcessId(hwnd, out pid);
@@ -735,6 +745,21 @@ namespace WindowsVirtualDesktopHelper {
 				timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); if(Util.OS.IsWindow(hwnd)) Util.OS.SetForegroundWindow(hwnd); };
 				timer.Start();
 			}
+		}
+
+		// Switches to the window's desktop (if needed) and brings the window to the front
+		public void FocusWindow(IntPtr hwnd) {
+			if(hwnd == IntPtr.Zero) return;
+			var ext = VDAPIExtended;
+			if(ext != null) {
+				var desktop = ext.GetWindowDesktop(hwnd);
+				if(desktop >= 0 && desktop != (int)this.GetVDDisplayNumber(true)) SwitchToDesktop(desktop);
+			}
+			Util.OS.ActivateWindow(hwnd);
+			// Retried once, as the switch animation can still be running
+			var timer = new System.Windows.Forms.Timer { Interval = 250 };
+			timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); if(Util.OS.IsWindow(hwnd)) Util.OS.ActivateWindow(hwnd); };
+			timer.Start();
 		}
 
 		public void TogglePinWindow(IntPtr hwnd) {
