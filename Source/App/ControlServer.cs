@@ -203,6 +203,7 @@ namespace WindowsVirtualDesktopHelper {
 				{ "pinned", pinned },
 				{ "appPinned", appPinned },
 				{ "autoPinned", app.IsAutoPinned(process) },
+				{ "icon", Util.WindowIcons.GetIconPath(hwnd) }, // PNG file path, or null
 			};
 		}
 

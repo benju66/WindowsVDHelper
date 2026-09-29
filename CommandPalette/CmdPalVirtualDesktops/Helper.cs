@@ -9,7 +9,7 @@ internal sealed record DesktopInfo(int Index, string Name);
 
 internal sealed record StatusInfo(int Current, int Count, IReadOnlyList<DesktopInfo> Desktops, bool Extended);
 
-internal sealed record WindowInfo(long Hwnd, string Title, string App, string Process, int Desktop, bool Pinned, bool AppPinned, bool AutoPinned)
+internal sealed record WindowInfo(long Hwnd, string Title, string App, string Process, int Desktop, bool Pinned, bool AppPinned, bool AutoPinned, string? IconPath)
 {
     public bool OnAllDesktops => Pinned || AppPinned;
 }
@@ -106,7 +106,8 @@ internal static class Helper
         w.GetProperty("desktop").GetInt32(),
         w.GetProperty("pinned").GetBoolean(),
         w.GetProperty("appPinned").GetBoolean(),
-        w.GetProperty("autoPinned").GetBoolean());
+        w.GetProperty("autoPinned").GetBoolean(),
+        w.TryGetProperty("icon", out var icon) && icon.ValueKind == JsonValueKind.String ? icon.GetString() : null);
 
     private static void Run(params (string Key, object Value)[] request)
     {

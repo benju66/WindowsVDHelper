@@ -82,6 +82,10 @@ internal static class Items
     public static IListItem[] Error(Exception ex, Action? afterStart = null) =>
         ex is HelperNotRunningException ? NotRunning(afterStart) : [Message("Something went wrong", ex.Message, Glyphs.Warning)];
 
+    // The window's own icon (a PNG the helper app extracted), or the generic window symbol
+    public static IconInfo WindowIcon(WindowInfo w) =>
+        !string.IsNullOrEmpty(w.IconPath) && File.Exists(w.IconPath) ? new IconInfo(w.IconPath) : new IconInfo(Glyphs.Window);
+
     public static string DesktopName(StatusInfo status, int index) =>
         index >= 0 && index < status.Desktops.Count ? status.Desktops[index].Name : $"Desktop {index + 1}";
 

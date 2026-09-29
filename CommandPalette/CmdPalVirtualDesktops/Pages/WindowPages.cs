@@ -36,7 +36,7 @@ internal sealed partial class WindowsPage : ListPage
                 {
                     Title = w.Title,
                     Subtitle = $"{w.App}  ·  {Items.Where(status, w)}",
-                    Icon = new IconInfo(Glyphs.Window),
+                    Icon = Items.WindowIcon(w),
                     Tags = [Items.DesktopTag(status, w)],
                     MoreCommands = status.Extended ? Items.WindowCommands(status, w, () => RaiseItemsChanged()) : [],
                 })];
@@ -80,8 +80,8 @@ internal sealed partial class PinWindowsPage : ListPage
                 {
                     Title = w.Title,
                     Subtitle = w.Pinned ? $"{w.App}  ·  shown on all desktops" : w.AppPinned ? $"{w.App}  ·  all windows of this app are shown on all desktops" : $"{w.App}  ·  {Items.Where(status, w)}",
-                    Icon = new IconInfo(w.Pinned ? Glyphs.Pin : Glyphs.Window),
-                    Tags = w.Pinned ? [new Tag("Pinned")] : [],
+                    Icon = Items.WindowIcon(w),
+                    Tags = w.Pinned ? [new Tag("Pinned") { Icon = new IconInfo(Glyphs.Pin), ToolTip = "Shown on all desktops" }] : [],
                 })];
         }
         catch (Exception ex)
@@ -118,6 +118,7 @@ internal sealed partial class MoveWindowPage : ListPage
             }
 
             Title = $"Move \"{window.Title}\" to...";
+            Icon = Items.WindowIcon(window);
             var status = Helper.Status();
             var items = new List<IListItem>();
             foreach (var desktop in status.Desktops)

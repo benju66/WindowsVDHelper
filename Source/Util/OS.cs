@@ -111,6 +111,36 @@ namespace WindowsVirtualDesktopHelper.Util {
 		// Cached per process id, as this is called for every foreground change (auto pin).
 		private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>> _processInfoCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>>();
 
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+
+		[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+		private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint flags, StringBuilder exeName, ref uint size);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool CloseHandle(IntPtr handle);
+
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, string> _processPathCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, string>();
+
+		// Full path of the exe of the process owning the window, or null. Works for elevated processes too
+		// (PROCESS_QUERY_LIMITED_INFORMATION), unlike Process.MainModule
+		public static string GetWindowProcessPath(IntPtr hWnd) {
+			uint pid;
+			GetWindowThreadProcessId(hWnd, out pid);
+			if (pid == 0) return null;
+			return _processPathCache.GetOrAdd(pid, id => {
+				var handle = OpenProcess(0x1000, false, id); // PROCESS_QUERY_LIMITED_INFORMATION
+				if (handle == IntPtr.Zero) return null;
+				try {
+					var sb = new StringBuilder(1024);
+					uint size = (uint)sb.Capacity;
+					return QueryFullProcessImageName(handle, 0, sb, ref size) ? sb.ToString() : null;
+				} finally {
+					CloseHandle(handle);
+				}
+			});
+		}
+
 		public static string GetWindowProcessName(IntPtr hWnd) {
 			return _getWindowProcessInfo(hWnd).Item1;
 		}
