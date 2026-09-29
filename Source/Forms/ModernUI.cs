@@ -502,15 +502,26 @@ namespace WindowsVirtualDesktopHelper.Forms {
 		}
 	}
 
-	/// <summary>Lays out its children top to bottom, full width (minus each child's left margin), and scrolls.</summary>
+	/// <summary>
+	/// A scrolling page: its <see cref="Items"/> are laid out top to bottom, full width (minus each item's margins).
+	/// The items live in an inner panel sized to fit them; this (outer) panel scrolls it with the standard
+	/// scroll bar and mouse wheel handling.
+	/// </summary>
 	internal class StackPanel : Panel {
-		private readonly float _scale;
+		private readonly Panel _inner;
+		private bool _laying = false;
+
+		// The page padding (not Padding, which would change the scrolled area)
+		public Padding ContentPadding;
+
+		public Control.ControlCollection Items { get { return _inner.Controls; } }
 
 		public StackPanel(float scale) {
-			_scale = scale;
-			AutoScroll = true;
+			// (the inner panel must exist before AutoScroll is set: setting it lays out)
+			_inner = new Panel { BackColor = Theme.WindowBack, Location = new Point(0, 0), Margin = new Padding(0) };
 			BackColor = Theme.WindowBack;
-			SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+			Controls.Add(_inner);
+			AutoScroll = true;
 		}
 
 		protected override void OnHandleCreated(EventArgs e) {
@@ -519,22 +530,47 @@ namespace WindowsVirtualDesktopHelper.Forms {
 		}
 
 		protected override void OnLayout(LayoutEventArgs levent) {
-			var scroll = AutoScrollPosition;
-			var width = ClientSize.Width - Padding.Horizontal;
-			var y = Padding.Top + scroll.Y;
-			foreach (Control c in Controls) {
+			if (_laying) { base.OnLayout(levent); return; }
+			_laying = true;
+			try {
+				LayoutItems();
+				base.OnLayout(levent); // updates the scroll bar for the inner panel's size
+				// The vertical scroll bar appearing (or disappearing) changes the available width: fit again,
+				// otherwise a horizontal scroll bar shows up
+				if (_inner != null && _inner.Width != ClientSize.Width) {
+					LayoutItems();
+					base.OnLayout(levent);
+				}
+			} finally {
+				_laying = false;
+			}
+		}
+
+		protected override void OnResize(EventArgs e) {
+			base.OnResize(e);
+			PerformLayout();
+		}
+
+		private void LayoutItems() {
+			if (_inner == null) return;
+			var width = ClientSize.Width; // excludes the vertical scroll bar when it is shown
+			var inner = width - ContentPadding.Horizontal;
+			var y = ContentPadding.Top;
+			_inner.SuspendLayout();
+			foreach (Control c in _inner.Controls) {
 				if (!c.Visible) continue;
 				y += c.Margin.Top;
-				var w = width - c.Margin.Left - c.Margin.Right;
+				var w = inner - c.Margin.Left - c.Margin.Right;
 				var card = c as SettingsCard;
 				var label = c as Label;
 				if (label != null) label.MaximumSize = new Size(w, 0);
-				var h = card != null ? card.HeightFor(w) : (c.Dock == DockStyle.None && c.AutoSize ? c.GetPreferredSize(new Size(w, 0)).Height : c.Height);
+				var h = card != null ? card.HeightFor(w) : (c.AutoSize ? c.GetPreferredSize(new Size(w, 0)).Height : c.Height);
 				var fullWidth = card != null || c is StackRow;
-				c.SetBounds(Padding.Left + c.Margin.Left + scroll.X, y, fullWidth ? w : (c.AutoSize ? c.GetPreferredSize(new Size(w, 0)).Width : c.Width), h);
+				c.SetBounds(ContentPadding.Left + c.Margin.Left, y, fullWidth ? w : (c.AutoSize ? c.GetPreferredSize(new Size(w, 0)).Width : c.Width), h);
 				y += h + c.Margin.Bottom;
 			}
-			AutoScrollMinSize = new Size(0, y - scroll.Y + Padding.Bottom);
+			_inner.ResumeLayout(false);
+			_inner.Size = new Size(width, y + ContentPadding.Bottom);
 		}
 	}
 

@@ -40,7 +40,7 @@ namespace WindowsVirtualDesktopHelper.Forms {
 				using (var glyph = new Bitmap(Theme.Glyph("", Theme.Accent, 32))) Icon = Icon.FromHandle(glyph.GetHicon());
 			} catch (Exception) { }
 			BuildNavigation();
-			_content = new StackPanel(_scale) { Dock = DockStyle.Fill, Padding = new Padding(S(36), S(24), S(36), S(36)) };
+			_content = new StackPanel(_scale) { Dock = DockStyle.Fill, ContentPadding = new Padding(S(36), S(24), S(36), S(36)) };
 			Controls.Add(_content);
 			_content.BringToFront();
 			ShowPage(PageGeneral);
@@ -109,7 +109,7 @@ namespace WindowsVirtualDesktopHelper.Forms {
 		private void Render() {
 			var scroll = -_content.AutoScrollPosition.Y;
 			_content.SuspendLayout();
-			foreach (Control c in _content.Controls.Cast<Control>().ToList()) { _content.Controls.Remove(c); c.Dispose(); }
+			foreach (Control c in _content.Items.Cast<Control>().ToList()) { _content.Items.Remove(c); c.Dispose(); }
 			var controls = new List<Control>();
 			switch (_page) {
 				case PageDesktops: BuildDesktopsPage(controls); break;
@@ -118,8 +118,9 @@ namespace WindowsVirtualDesktopHelper.Forms {
 				case PageAbout: BuildAboutPage(controls); break;
 				default: BuildGeneralPage(controls); break;
 			}
-			_content.Controls.AddRange(controls.ToArray());
+			_content.Items.AddRange(controls.ToArray());
 			_content.ResumeLayout(true);
+			_content.PerformLayout(); // the items are in the inner panel, so re-measure the page explicitly
 			_content.AutoScrollPosition = new Point(0, scroll);
 		}
 
