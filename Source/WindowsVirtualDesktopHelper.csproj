@@ -124,6 +124,9 @@
     <Compile Include="App\ControlServer.cs" />
     <Compile Include="Util\WindowIcons.cs" />
     <Compile Include="Util\ModernMenu.cs" />
+    <Compile Include="Forms\TrayFlyout.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Util\TitleBarMenuHook.cs" />
     <Compile Include="Forms\SettingsForm.Tabs.cs">
       <DependentUpon>SettingsForm.cs</DependentUpon>

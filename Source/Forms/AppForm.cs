@@ -15,7 +15,7 @@ namespace WindowsVirtualDesktopHelper {
 
 			// The tray menu gets the desktop list and actions added each time it opens, and is
 			// also available on the desktop name icon
-			this.notifyIconName.ContextMenuStrip = this.contextMenuStrip1;
+			this.notifyIconName.ContextMenuStrip = this.contextMenuStrip1; // replaced by the tray panel if enabled (App.UIUpdateIcons)
 
 			// Windows 11 style for all menus of the app (see Util.ModernMenuRenderer)
 			ToolStripManager.Renderer = new Util.ModernMenuRenderer();
@@ -189,6 +189,7 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		private void notifyIconName_MouseClick(object sender, MouseEventArgs e) {
+			if (e.Button == MouseButtons.Right && App.Instance.UseTrayFlyout) { App.Instance.ShowTrayFlyout(notifyIconName); return; }
 			if(Settings.GetBool("feature.showDesktopNumberInIconTray.clickToOpenTaskView")) {
 				if(e.Button == MouseButtons.Left) {
 					// Already open?
@@ -202,6 +203,7 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		private void notifyIconNumber_MouseClick(object sender, MouseEventArgs e) {
+			if (e.Button == MouseButtons.Right && App.Instance.UseTrayFlyout) { App.Instance.ShowTrayFlyout(notifyIconNumber); return; }
 			if (Settings.GetBool("feature.showDesktopNumberInIconTray.clickToOpenTaskView")) {
 				if(e.Button == MouseButtons.Left) {
 					// Already open?

@@ -69,6 +69,7 @@ namespace WindowsVirtualDesktopHelper {
 			layout.Controls.Add(Option("Ctrl + right-click a window's title bar opens its window menu", "feature.windowMenu.titleBarCtrlRightClick"));
 
 			layout.Controls.Add(Heading("Tray icon"));
+			layout.Controls.Add(Option("Right-click opens the panel (off: the classic menu)", "feature.trayFlyout"));
 			layout.Controls.Add(Option("Color the desktop number per desktop", "feature.colorIconsPerDesktop"));
 			layout.Controls.Add(Option("Notify when a shortcut can't be used because another app uses it", "feature.notifyHotKeyConflicts"));
 

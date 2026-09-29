@@ -74,6 +74,20 @@ namespace WindowsVirtualDesktopHelper.Util {
 			return false;
 		}
 
+		// The screen rectangle of a tray icon, or null if it isn't shown (e.g. in the overflow area)
+		public static System.Drawing.Rectangle? GetIconRect(NotifyIcon icon) {
+			try {
+				var id = (int)typeof(NotifyIcon).GetField("id", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(icon);
+				var window = (NativeWindow)typeof(NotifyIcon).GetField("window", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(icon);
+				var identifier = new NOTIFYICONIDENTIFIER { cbSize = (uint)Marshal.SizeOf(typeof(NOTIFYICONIDENTIFIER)), hWnd = window.Handle, uID = (uint)id };
+				RECT rect;
+				if (Shell_NotifyIconGetRect(ref identifier, out rect) != 0) return null;
+				return System.Drawing.Rectangle.FromLTRB(rect.left, rect.top, rect.right, rect.bottom);
+			} catch (Exception) {
+				return null;
+			}
+		}
+
 		private List<RECT> _getIconRects() {
 			var rects = new List<RECT>();
 			foreach (var icon in _icons) {

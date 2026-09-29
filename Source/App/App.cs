@@ -1196,6 +1196,87 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// ---- Tray panel (right-click on the desktop number, see TrayFlyout)
+
+		public class WindowEntry {
+			public IntPtr Hwnd;
+			public string Title, AppName, Process;
+			public int Desktop; // -1 if unknown or shown on all desktops
+			public bool Pinned, AppPinned;
+		}
+
+		// All open app windows with their desktop and pin state
+		public List<WindowEntry> GetWindowEntries() {
+			var list = new List<WindowEntry>();
+			var ext = VDAPIExtended;
+			if(ext == null) return list;
+			foreach(var hwnd in Util.OS.GetAppWindows()) {
+				if(!_isUserWindow(hwnd)) continue;
+				var entry = new WindowEntry { Hwnd = hwnd, Title = Util.OS.GetHandleWndName(hwnd), AppName = Util.OS.GetWindowAppName(hwnd), Process = Util.OS.GetWindowProcessName(hwnd) };
+				try { entry.Pinned = ext.IsWindowPinned(hwnd); } catch(Exception) { continue; } // not a normal app window
+				try { entry.AppPinned = ext.IsAppPinned(hwnd); } catch(Exception) { }
+				entry.Desktop = entry.Pinned || entry.AppPinned ? -1 : ext.GetWindowDesktop(hwnd);
+				list.Add(entry);
+			}
+			return list;
+		}
+
+		private TrayFlyout _trayFlyout = null;
+		private int _trayFlyoutClosedTick = 0;
+
+		public bool UseTrayFlyout {
+			get { return Settings.GetBool("feature.trayFlyout"); }
+		}
+
+		// Opens the tray panel next to the tray icon; a second click on the icon closes it again
+		public void ShowTrayFlyout(NotifyIcon from) {
+			if(_trayFlyout != null && !_trayFlyout.IsDisposed) {
+				_trayFlyout.Close();
+				return;
+			}
+			// The click on the icon already closed the open panel (it lost the focus): don't re-open it
+			if(unchecked(Environment.TickCount - _trayFlyoutClosedTick) < 300) return;
+			try {
+				var anchor = Util.TrayMouseWheel.GetIconRect(from ?? this.AppForm.notifyIconNumber);
+				var flyout = new TrayFlyout(GetActiveUserWindow(false), anchor);
+				flyout.FormClosed += (s, e) => { _trayFlyout = null; _trayFlyoutClosedTick = Environment.TickCount; };
+				_trayFlyout = flyout;
+				flyout.ShowFlyout();
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not show the tray panel: " + e.Message);
+			}
+		}
+
+		// The panel's "more" menu: the less frequently used items
+		public List<ToolStripItem> BuildMoreMenuItems(Action<Action> closeThen) {
+			var items = new List<ToolStripItem>();
+			var options = new ToolStripMenuItem("Options") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Options) };
+			options.DropDownItems.Add(_optionMenuItem("Wrap around at first/last desktop", "feature.wrapAround"));
+			options.DropDownItems.Add(_optionMenuItem("Color the desktop number per desktop", "feature.colorIconsPerDesktop"));
+			options.DropDownItems.Add(_optionMenuItem("Mouse wheel over the tray icons switches desktops", "feature.mouseWheelOnTrayIcons"));
+			if(VDAPIExtended != null) {
+				options.DropDownItems.Add(_optionMenuItem("Switch along when moving a window", "feature.moveWindow.follow"));
+				options.DropDownItems.Add(_optionMenuItem("Ctrl + right-click a title bar opens the window menu", "feature.windowMenu.titleBarCtrlRightClick"));
+			}
+			options.DropDownItems.Add(_optionMenuItem("Right-click the tray icon opens this panel (off: classic menu)", "feature.trayFlyout"));
+			items.Add(options);
+			var shortcuts = new ToolStripMenuItem("Keyboard shortcuts") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Keyboard) };
+			shortcuts.Click += (s, e) => closeThen(ShowKeyboardShortcuts);
+			items.Add(shortcuts);
+			items.Add(new ToolStripSeparator());
+			var openConfig = new ToolStripMenuItem("Open config folder") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Folder) };
+			openConfig.Click += (s, e) => closeThen(() => OpenURL(Settings.GetConfigDirectory()));
+			items.Add(openConfig);
+			var openLog = new ToolStripMenuItem("Open log file") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Log) };
+			openLog.Click += (s, e) => closeThen(() => { var log = System.IO.Path.Combine(Settings.GetConfigDirectory(), "WindowsVirtualDesktopHelper.log"); if(System.IO.File.Exists(log)) OpenURL(log); });
+			items.Add(openLog);
+			items.Add(new ToolStripSeparator());
+			var about = new ToolStripMenuItem("About") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Info) };
+			about.Click += (s, e) => closeThen(ShowAbout);
+			items.Add(about);
+			return items;
+		}
+
 		// Set while a click in the pin checklist is being handled, so the tray menu stays open (see AppForm)
 		public bool KeepTrayMenuOpen = false;
 
@@ -1766,6 +1847,10 @@ namespace WindowsVirtualDesktopHelper {
 			UIUpdateIconForVDDisplayNumber(theme, App.Instance.CurrentVDDisplayNumber, App.Instance.CurrentVDDisplayName);
 			UIUpdateIconForVDDisplayName(theme, App.Instance.CurrentVDDisplayName);
 			UIUpdateNextPrevIconVisibility(theme);
+			// Right-click: the tray panel (handled in AppForm) or the classic menu
+			var trayMenu = UseTrayFlyout ? null : this.AppForm.contextMenuStrip1;
+			this.AppForm.notifyIconNumber.ContextMenuStrip = trayMenu;
+			this.AppForm.notifyIconName.ContextMenuStrip = trayMenu;
 			// Visibility by feature
 			this.AppForm.notifyIconName.Visible = Settings.GetBool("feature.showDesktopNameInIconTray");
 			this.AppForm.notifyIconNumber.Visible = Settings.GetBool("feature.showDesktopNumberInIconTray");
