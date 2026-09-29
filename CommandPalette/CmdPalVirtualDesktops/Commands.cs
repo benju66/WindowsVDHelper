@@ -97,7 +97,7 @@ internal static class Items
     {
         if (w.OnAllDesktops)
         {
-            return new Tag("All desktops") { ToolTip = w.AppPinned ? "All windows of this app are shown on all desktops" : "Shown on all desktops" };
+            return new Tag("All desktops") { ToolTip = w.AppPinned ? "This app is pinned to all desktops" : "Pinned to all desktops" };
         }
 
         return new Tag(DesktopName(status, w.Desktop)) { ToolTip = w.Desktop == status.Current ? "On this desktop" : "On another desktop" };
@@ -117,27 +117,27 @@ internal static class Items
         {
             new CommandContextItem(new MoveWindowPage(w)) { Title = "Move to desktop...", Icon = new IconInfo(Glyphs.Move), RequestedShortcut = Key(VirtualKey.M) },
             new CommandContextItem(new HelperCommand("Move to a new desktop", Glyphs.Add, () => Helper.MoveToNewDesktop(w.Hwnd))) { RequestedShortcut = Key(VirtualKey.N) },
-            new CommandContextItem(new HelperCommand(w.Pinned ? "Stop showing on all desktops" : "Show on all desktops", w.Pinned ? Glyphs.Unpin : Glyphs.Pin, () =>
+            new CommandContextItem(new HelperCommand(w.Pinned ? "Unpin window" : "Pin window to all desktops", w.Pinned ? Glyphs.Unpin : Glyphs.Pin, () =>
             {
                 var pinned = Helper.SetPinned(w.Hwnd, !w.Pinned);
                 refresh();
-                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"\"{w.Title}\" is shown on all desktops" : $"\"{w.Title}\" unpinned", Result = CommandResult.KeepOpen() });
+                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"\"{w.Title}\" is pinned to all desktops" : $"\"{w.Title}\" unpinned", Result = CommandResult.KeepOpen() });
             })) { RequestedShortcut = Key(VirtualKey.P) },
         };
 
         if (!string.IsNullOrEmpty(w.App))
         {
-            list.Add(new CommandContextItem(new HelperCommand(w.AppPinned ? $"Stop showing all {w.App} windows on all desktops" : $"Show all {w.App} windows on all desktops", w.AppPinned ? Glyphs.Unpin : Glyphs.Pin, () =>
+            list.Add(new CommandContextItem(new HelperCommand(w.AppPinned ? $"Unpin {w.App}" : $"Pin {w.App} to all desktops (all its windows)", w.AppPinned ? Glyphs.Unpin : Glyphs.Pin, () =>
             {
                 var pinned = Helper.SetAppPinned(w.Hwnd, !w.AppPinned);
                 refresh();
-                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"All {w.App} windows are shown on all desktops" : $"{w.App} unpinned", Result = CommandResult.KeepOpen() });
+                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"{w.App} is pinned to all desktops" : $"{w.App} unpinned", Result = CommandResult.KeepOpen() });
             })) { RequestedShortcut = Key(VirtualKey.P, shift: true) });
-            list.Add(new CommandContextItem(new HelperCommand(w.AutoPinned ? $"Stop always showing {w.App} on all desktops" : $"Always show {w.App} on all desktops", Glyphs.Pin, () =>
+            list.Add(new CommandContextItem(new HelperCommand(w.AutoPinned ? $"Stop always pinning {w.App}" : $"Always pin {w.App} to all desktops", Glyphs.Pin, () =>
             {
                 Helper.SetAutoPinned(w.Process, !w.AutoPinned);
                 refresh();
-                return CommandResult.ShowToast(new ToastArgs { Message = w.AutoPinned ? $"{w.App} is no longer shown on all desktops automatically" : $"{w.App} will always be shown on all desktops", Result = CommandResult.KeepOpen() });
+                return CommandResult.ShowToast(new ToastArgs { Message = w.AutoPinned ? $"{w.App} is no longer pinned automatically" : $"{w.App} will always be pinned to all desktops", Result = CommandResult.KeepOpen() });
             })) { RequestedShortcut = Key(VirtualKey.A, shift: true) });
             list.Add(new CommandContextItem(new HelperCommand($"Bring all {w.App} windows here", Glyphs.Gather, () => Helper.Gather(w.Hwnd))) { RequestedShortcut = Key(VirtualKey.G) });
         }

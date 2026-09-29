@@ -36,9 +36,7 @@ namespace WindowsVirtualDesktopHelper.Forms {
 			BackColor = Theme.WindowBack;
 			ForeColor = Theme.Text;
 			KeyPreview = true;
-			try {
-				using (var glyph = new Bitmap(Theme.Glyph("", Theme.Accent, 32))) Icon = Icon.FromHandle(glyph.GetHicon());
-			} catch (Exception) { }
+			try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }
 			BuildNavigation();
 			_content = new StackPanel(_scale) { Dock = DockStyle.Fill, ContentPadding = new Padding(S(36), S(24), S(36), S(36)) };
 			Controls.Add(_content);
@@ -241,8 +239,8 @@ namespace WindowsVirtualDesktopHelper.Forms {
 				c.Add(ToggleCard("", "Switch along when moving a window", "After moving a window to another desktop, go to that desktop too", "feature.moveWindow.follow"));
 				c.Add(ToggleCard("", "Window menu on Ctrl + right-click", "Ctrl + right-click a window's title bar for its desktop menu (move, pin, ...)", "feature.windowMenu.titleBarCtrlRightClick"));
 
-				c.Add(Section("Always show on all desktops"));
-				c.Add(Note("These apps are shown on every desktop automatically, also after restarting."));
+				c.Add(Section("Always pinned to all desktops"));
+				c.Add(Note("These apps are pinned to all desktops automatically, also after restarting."));
 				var apps = App.Instance.GetAutoPinApps();
 				foreach (var app in apps) {
 					var process = app;
@@ -317,8 +315,8 @@ namespace WindowsVirtualDesktopHelper.Forms {
 			new ShortcutDef { Feature = "feature.useHotKeyToMoveWindowForward", Title = "Move the window to the next desktop", NeedsExtended = true },
 			new ShortcutDef { Feature = "feature.useHotKeyToMoveWindowBackward", Title = "Move the window to the previous desktop", NeedsExtended = true },
 			new ShortcutDef { Feature = "feature.useHotKeyToMoveWindowToNewDesktop", Title = "Move the window to a new desktop", NeedsExtended = true },
-			new ShortcutDef { Feature = "feature.useHotKeyToTogglePinWindow", Title = "Show the window on all desktops", Description = "Press again to undo", NeedsExtended = true },
-			new ShortcutDef { Feature = "feature.useHotKeyToTogglePinApp", Title = "Show all windows of the app on all desktops", Description = "Also windows it opens later. Press again to undo", NeedsExtended = true },
+			new ShortcutDef { Feature = "feature.useHotKeyToTogglePinWindow", Title = "Pin window to all desktops", Description = "Shows the active window on every desktop. Press again to unpin", NeedsExtended = true },
+			new ShortcutDef { Feature = "feature.useHotKeyToTogglePinApp", Title = "Pin app to all desktops", Description = "All windows of the active app, also ones it opens later. Press again to unpin", NeedsExtended = true },
 			new ShortcutDef { Feature = "feature.useHotKeyToGatherAppWindows", Title = "Bring all windows of the app here", Description = "From the other desktops", NeedsExtended = true },
 			new ShortcutDef { Feature = "feature.useHotKeyToShowWindowMenu", Title = "Window menu", Description = "Move, pin and more for the active window, at the mouse cursor", NeedsExtended = true },
 		};

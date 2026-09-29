@@ -300,8 +300,8 @@ namespace WindowsVirtualDesktopHelper {
 				var defs = new[] {
 					new ActionDef("", "Move", _movePicker, "Move to another desktop (pick a desktop above)", "MoveWindowForward", () => { _movePicker = !_movePicker; Render(); }),
 					new ActionDef("", "New desk", false, "Move to a new desktop", "MoveWindowToNewDesktop", () => CloseThen(() => App.Instance.MoveWindowToNewDesktop(window.Hwnd))),
-					new ActionDef("", window.Pinned ? "Pinned" : "Pin", window.Pinned, window.Pinned ? "Shown on all desktops (click to unpin)" : "Show on all desktops", "TogglePinWindow", () => { App.Instance.TogglePinWindow(window.Hwnd); Refresh(); }),
-					new ActionDef("", window.AppPinned ? "App pinned" : "Pin app", window.AppPinned, (window.AppPinned ? "All " + window.AppName + " windows are on all desktops (click to unpin)" : "Show all " + window.AppName + " windows on all desktops"), "TogglePinApp", () => { App.Instance.TogglePinApp(window.Hwnd); Refresh(); }),
+					new ActionDef("", window.Pinned ? "Pinned" : "Pin", window.Pinned, window.Pinned ? "Pinned to all desktops (click to unpin)" : "Pin window to all desktops", "TogglePinWindow", () => { App.Instance.TogglePinWindow(window.Hwnd); Refresh(); }),
+					new ActionDef("", window.AppPinned ? "App pinned" : "Pin app", window.AppPinned, (window.AppPinned ? window.AppName + " is pinned to all desktops (click to unpin)" : "Pin " + window.AppName + " to all desktops (all its windows)"), "TogglePinApp", () => { App.Instance.TogglePinApp(window.Hwnd); Refresh(); }),
 					new ActionDef("", "Bring here", false, "Bring all " + window.AppName + " windows to this desktop", "GatherAppWindows", () => CloseThen(() => App.Instance.GatherAppWindows(window.Hwnd))),
 				};
 				for (var i = 0; i < defs.Length; i++) {
@@ -318,7 +318,7 @@ namespace WindowsVirtualDesktopHelper {
 			// Windows on all desktops (max 4 here, the rest in the pin list)
 			var pinned = _windows.Where(w => w.Pinned).ToList();
 			var pinnedApps = _windows.Where(w => w.AppPinned && !w.Pinned).GroupBy(w => w.Process).Select(g => g.First()).ToList();
-			flow.Controls.Add(SectionLabel("On all desktops"));
+			flow.Controls.Add(SectionLabel("Pinned to all desktops"));
 			var shown = 0;
 			foreach (var w in pinned) {
 				if (shown++ >= 4) break;
@@ -373,7 +373,7 @@ namespace WindowsVirtualDesktopHelper {
 					Subtitle = entry.Pinned ? "" : entry.AppPinned ? "App pinned" : DesktopName(entry.Desktop),
 					TrailingGlyph = entry.Pinned ? "" : "", TrailingActive = entry.Pinned, Margin = new Padding(0)
 				};
-				_toolTip.SetToolTip(row, entry.Pinned ? "Shown on all desktops, click to unpin" : "Click to show on all desktops");
+				_toolTip.SetToolTip(row, entry.Pinned ? "Pinned to all desktops, click to unpin" : "Click to pin to all desktops");
 				Action toggle = () => {
 					try { App.Instance.VDAPIExtended.SetWindowPinned(entry.Hwnd, !entry.Pinned); } catch (Exception e) { Util.Logging.WriteLine("TrayFlyout: Error: pin: " + e.Message); }
 					Refresh();

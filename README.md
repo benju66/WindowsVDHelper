@@ -1,4 +1,6 @@
-# Windows Virtual Desktop Helper (local build)
+<img src="Assets/logo.png" width="96" alt="">
+
+# Windows VD Helper
 
 A tray app for Windows 11 virtual desktops: shows the current desktop in the tray, switches instantly, and lets you manage desktops and windows from the tray menu or with hotkeys.
 

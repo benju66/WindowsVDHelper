@@ -14,6 +14,7 @@ namespace WindowsVirtualDesktopHelper.Util {
 				form.MinimizeBox = false;
 				form.MaximizeBox = false;
 				form.ShowInTaskbar = true;
+				try { form.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (System.Exception) { }
 				form.TopMost = true;
 				form.AutoScaleMode = AutoScaleMode.Dpi;
 				form.AutoSize = true;

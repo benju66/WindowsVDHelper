@@ -61,6 +61,10 @@ $manifestPath = Join-Path $out 'AppxManifest.xml'
 Write-Host "Layout: $out"
 if ($NoRegister) { return }
 
+# Windows refuses to re-register the same version when files (e.g. the icons) changed: remove the old
+# development registration first (the files stay where they are)
+$existing = Get-AppxPackage -Name $name -ErrorAction SilentlyContinue
+if ($existing) { Remove-AppxPackage $existing.PackageFullName }
 Add-AppxPackage -Register $manifestPath -ForceApplicationShutdown
 Get-AppxPackage -Name $name | Select-Object Name, Version, InstallLocation | Format-List
 Write-Host 'Registered. Now run "Reload" (Reload Command Palette extensions) in Command Palette.' -ForegroundColor Green

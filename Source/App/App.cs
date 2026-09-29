@@ -794,7 +794,7 @@ namespace WindowsVirtualDesktopHelper {
 				ext.SetAppPinned(hwnd, pinned);
 				var app = Util.OS.GetWindowAppName(hwnd);
 				Util.Logging.WriteLine($"App: {(pinned ? "pinned" : "unpinned")} app \"{app}\"");
-				ShowFeedback(pinned ? $"All {app} windows on all desktops" : $"{app} unpinned");
+				ShowFeedback(pinned ? $"{app} pinned to all desktops" : $"{app} unpinned");
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: could not pin/unpin app: " + e.Message);
 			}
@@ -1084,7 +1084,7 @@ namespace WindowsVirtualDesktopHelper {
 			}
 
 			// Show on all desktops
-			var pinItem = new ToolStripMenuItem("Show on all desktops") { Checked = pinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinWindow"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
+			var pinItem = new ToolStripMenuItem("Pin window to all desktops") { Checked = pinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinWindow"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
 			pinItem.Click += (s, e) => TogglePinWindow(hwnd);
 			items.Add(pinItem);
 
@@ -1092,10 +1092,10 @@ namespace WindowsVirtualDesktopHelper {
 			var appName = Util.OS.GetWindowAppName(hwnd).Replace("&", "&&");
 			var processName = Util.OS.GetWindowProcessName(hwnd);
 			if(appName != "") {
-				var pinAppItem = new ToolStripMenuItem($"Show all {appName} windows on all desktops") { Checked = appPinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinApp"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
+				var pinAppItem = new ToolStripMenuItem($"Pin {appName} to all desktops (all its windows)") { Checked = appPinned, ShortcutKeyDisplayString = GetHotKeyForAction("TogglePinApp"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
 				pinAppItem.Click += (s, e) => TogglePinApp(hwnd);
 				items.Add(pinAppItem);
-				var autoPinItem = new ToolStripMenuItem($"Always show {appName} on all desktops") { Checked = IsAutoPinned(processName), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
+				var autoPinItem = new ToolStripMenuItem($"Always pin {appName} to all desktops") { Checked = IsAutoPinned(processName), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
 				autoPinItem.Click += (s, e) => SetAutoPinned(hwnd, !IsAutoPinned(processName));
 				items.Add(autoPinItem);
 				var gatherItem = new ToolStripMenuItem($"Bring all {appName} windows here") { ShortcutKeyDisplayString = GetHotKeyForAction("GatherAppWindows"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Gather) };

@@ -29,12 +29,12 @@ public sealed partial class VirtualDesktopsCommandsProvider : CommandProvider, I
                 var window = Helper.LastWindow() ?? throw new InvalidOperationException("No window to move");
                 Helper.MoveToNewDesktop(window.Hwnd);
             })) { Title = "Move window to a new desktop", Subtitle = "Create a desktop and take the window you were working in there" },
-            new CommandItem(TopLevel("vdh.togglepin", "Show window on all desktops", Glyphs.Pin, () =>
+            new CommandItem(TopLevel("vdh.togglepin", "Pin window to all desktops", Glyphs.Pin, () =>
             {
                 var window = Helper.LastWindow() ?? throw new InvalidOperationException("No window to pin");
                 var pinned = Helper.SetPinned(window.Hwnd, !window.Pinned);
-                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"\"{window.Title}\" is shown on all desktops" : $"\"{window.Title}\" unpinned", Result = CommandResult.Dismiss() });
-            })) { Title = "Show window on all desktops (toggle)", Subtitle = "Pin or unpin the window you were working in" },
+                return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"\"{window.Title}\" is pinned to all desktops" : $"\"{window.Title}\" unpinned", Result = CommandResult.Dismiss() });
+            })) { Title = "Pin window to all desktops (toggle)", Subtitle = "Pin or unpin the window you were working in" },
             new CommandItem(TopLevel("vdh.new", "New desktop", Glyphs.Add, () => { Helper.NewDesktop(); })) { Title = "New desktop", Subtitle = "Create a desktop and switch to it" },
         ];
 

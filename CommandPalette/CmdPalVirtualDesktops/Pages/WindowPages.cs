@@ -80,10 +80,10 @@ internal sealed partial class PinWindowsPage : ListPage
                 }))
                 {
                     Title = w.Title,
-                    Subtitle = w.Pinned ? $"{w.App}  ·  shown on all desktops" : w.AppPinned ? $"{w.App}  ·  all windows of this app are shown on all desktops" : $"{w.App}  ·  {Items.Where(status, w)}",
+                    Subtitle = w.Pinned ? $"{w.App}  ·  pinned to all desktops" : w.AppPinned ? $"{w.App}  ·  the app is pinned to all desktops" : $"{w.App}  ·  {Items.Where(status, w)}",
                     Icon = Items.WindowIcon(w),
                     Section = w.Pinned ? "Pinned" : Items.Section(status, w),
-                    Tags = w.Pinned ? [new Tag("Pinned") { Icon = new IconInfo(Glyphs.Pin), ToolTip = "Shown on all desktops" }] : [],
+                    Tags = w.Pinned ? [new Tag("Pinned") { Icon = new IconInfo(Glyphs.Pin), ToolTip = "Pinned to all desktops" }] : [],
                 })];
         }
         catch (Exception ex)

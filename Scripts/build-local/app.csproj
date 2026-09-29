@@ -18,6 +18,7 @@
     <Prefer32Bit>false</Prefer32Bit>
     <DebugType>none</DebugType>
     <NoWarn>CS0168;CS0219;CS0649;CS0169;CS0414;CS0108;CS0618;CS0067</NoWarn>
+    <ApplicationIcon>$(MSBuildThisFileDirectory)..\..\Assets\WindowsVDHelper.ico</ApplicationIcon>
     <SourceDir>$(MSBuildThisFileDirectory)..\..\Source\</SourceDir>
   </PropertyGroup>
   <ItemGroup>
