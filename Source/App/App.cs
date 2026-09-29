@@ -813,16 +813,31 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public void SetAutoPinned(IntPtr hwnd, bool autoPin) {
-			var processName = Util.OS.GetWindowProcessName(hwnd);
-			if(processName == "") return;
+			SetAutoPinnedProcess(Util.OS.GetWindowProcessName(hwnd), autoPin);
+		}
+
+		// Adds/removes an app (process name) to/from the auto pin list and pins/unpins its open windows right away
+		public void SetAutoPinnedProcess(string processName, bool autoPin) {
+			if(string.IsNullOrWhiteSpace(processName)) return;
 			var apps = _getAutoPinApps().Where(a => !string.Equals(a, processName, StringComparison.OrdinalIgnoreCase)).ToList();
 			if(autoPin) apps.Add(processName);
 			Settings.SetString("feature.autoPin.apps", string.Join(", ", apps));
 			try { Settings.SaveConfig(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: saving config: " + e.Message); }
 			var ext = VDAPIExtended;
-			if(ext != null) {
-				try { ext.SetAppPinned(hwnd, autoPin); } catch(Exception e) { Util.Logging.WriteLine("App: Error: could not pin/unpin app: " + e.Message); }
+			if(ext == null) return;
+			foreach(var window in Util.OS.GetAppWindows()) {
+				if(!string.Equals(Util.OS.GetWindowProcessName(window), processName, StringComparison.OrdinalIgnoreCase)) continue;
+				try {
+					ext.SetAppPinned(window, autoPin);
+					break; // app level: one window pins/unpins them all
+				} catch(Exception) {
+					// not a pinnable app window, try the next one
+				}
 			}
+		}
+
+		public List<string> GetAutoPinApps() {
+			return _getAutoPinApps();
 		}
 
 		// Pins the app of the window if it is in the auto pin list and not pinned yet
@@ -1279,6 +1294,40 @@ namespace WindowsVirtualDesktopHelper {
 
 		#region Hot Keys
 
+		// Hotkeys which were not registered because the same key combination is used by another of our hotkeys
+		private List<string> _hotKeyDuplicates = new List<string>();
+
+		// Status of a hotkey (or, for the 1..9 hotkeys, of a modifier combination) for the settings window:
+		// null = active, otherwise the reason why it isn't
+		public string GetHotKeyProblem(string hotkeyOrModifiers) {
+			if(string.IsNullOrWhiteSpace(hotkeyOrModifiers)) return null;
+			var normalized = _normalizeHotKey(hotkeyOrModifiers);
+			System.Func<string, bool> matches = entry => {
+				var hotkey = _normalizeHotKey(entry.Split('=')[0]);
+				return hotkey == normalized || hotkey.StartsWith(normalized + "+");
+			};
+			if(_hotKeyConflicts.Any(matches)) return "Used by another app";
+			if(_hotKeyDuplicates.Any(matches)) return "Same keys as another shortcut";
+			return null;
+		}
+
+		private static string _normalizeHotKey(string hotkey) {
+			return string.Join("+", hotkey.Split('+').Select(k => k.Trim().ToLowerInvariant()).Where(k => k != ""));
+		}
+
+		// Temporarily releases all hotkeys, e.g. while the user records a new shortcut (otherwise pressing an
+		// existing shortcut would run its action instead of being recorded)
+		public void SuspendHotKeys() {
+			if(this._keyboardHooks != null) {
+				this._keyboardHooks.Dispose();
+				this._keyboardHooks = null;
+			}
+		}
+
+		public void ResumeHotKeys() {
+			if(this._keyboardHooks == null) SetupHotKeys();
+		}
+
 		public void SetupHotKeys() {
 			// Clear old hooks
 			if(this._keyboardHooks != null) {
@@ -1356,6 +1405,7 @@ namespace WindowsVirtualDesktopHelper {
 
 			// Parse all hotkeys to cached HotKeyAction structs
 			_keyboardHooksHotKeysAndActions = new List<HotKeyAction>();
+			var duplicates = new List<string>();
 			foreach(var hotkeyAndAction in hotkeys) {
 				 {
 					// Init HotKeyAction struct
@@ -1439,6 +1489,7 @@ namespace WindowsVirtualDesktopHelper {
 						var duplicate = _keyboardHooksHotKeysAndActions.FirstOrDefault(h => h.Keys == hotkeyAction.Keys && h.Modifiers == hotkeyAction.Modifiers);
 						if(duplicate != null) {
 							Util.Logging.WriteLine($"SetupHotKeys: ignoring hotkey {hotkeyAction.HotKeyAndAction}, the same key combination is already used by {duplicate.HotKeyAndAction}");
+							duplicates.Add(hotkeyAction.HotKeyAndAction);
 						} else {
 							_keyboardHooksHotKeysAndActions.Add(hotkeyAction);
 						}
@@ -1464,6 +1515,7 @@ namespace WindowsVirtualDesktopHelper {
 				}
 			}
 			_hotKeyConflicts = conflicts;
+			_hotKeyDuplicates = duplicates;
 			// At startup the tray icons don't exist yet, then StartUp shows the notification
 			if(this.AppForm != null && this.AppForm.IsHandleCreated) _postToUI(NotifyHotKeyConflicts);
 		}

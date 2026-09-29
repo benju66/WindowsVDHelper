@@ -97,11 +97,11 @@ namespace WindowsVirtualDesktopHelper {
 
 			// Feature: useHotKeyToSwitchDesktopForward
 			RegisterDefault("feature.useHotKeyToSwitchDesktopForward", false);
-			RegisterDefault("feature.useHotKeyToSwitchDesktopForward.hotkey", "Alt + Right");
+			RegisterDefault("feature.useHotKeyToSwitchDesktopForward.hotkey", "Ctrl + Alt + Right");
 
 			// Feature: useHotKeyToSwitchDesktopForward
 			RegisterDefault("feature.useHotKeyToSwitchDesktopBackward", false);
-			RegisterDefault("feature.useHotKeyToSwitchDesktopBackward.hotkey", "Alt + Left");
+			RegisterDefault("feature.useHotKeyToSwitchDesktopBackward.hotkey", "Ctrl + Alt + Left");
 
 			// Feature: move the active window to another desktop (Windows 11 24H2+)
 			RegisterDefault("feature.useHotKeyToMoveWindowForward", true, "Move the active window to the next desktop", "v2.2");
@@ -334,6 +334,12 @@ namespace WindowsVirtualDesktopHelper {
 			} else {
 				return defaultValue;
 			}
+		}
+
+		// Removes a setting from the config, so the default applies again
+		public static void ResetToDefault(string key) {
+			object removed;
+			if(_settingsConfig.TryRemove(key, out removed)) HasUnsavedChanges = true;
 		}
 
 		public static void SetString(string key, string value) {

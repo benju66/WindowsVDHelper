@@ -121,6 +121,9 @@
     <Compile Include="Util\Emoji.cs" />
     <Compile Include="Util\Icons.cs" />
     <Compile Include="Util\Prompt.cs" />
+    <Compile Include="Forms\SettingsForm.Tabs.cs">
+      <DependentUpon>SettingsForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="Util\TrayMouseWheel.cs" />
     <Compile Include="VirtualDesktopAPI\Notifications.cs" />
     <Compile Include="VirtualDesktopAPI\IVirtualDesktopManagerExtended.cs" />

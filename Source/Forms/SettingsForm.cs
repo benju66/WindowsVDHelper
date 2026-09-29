@@ -14,10 +14,16 @@ namespace WindowsVirtualDesktopHelper {
 
 			// Init UI
 			InitializeComponent();
+			BuildTabs(); // see SettingsForm.Tabs.cs
 			LoadSettingsIntoUI();
 
 
 			IsLoading = false;
+		}
+
+		protected override void OnVisibleChanged(EventArgs e) {
+			base.OnVisibleChanged(e);
+			if (this.Visible) LoadTabs(); // e.g. the shortcut status may have changed since the window was last shown
 		}
 
 		
@@ -72,6 +78,7 @@ namespace WindowsVirtualDesktopHelper {
 
 
 			SyncDependentControls();
+			LoadTabs();
 		}
 		
 		// Re-reads all settings into the controls, e.g. after the config file was edited
