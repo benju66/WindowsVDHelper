@@ -35,6 +35,13 @@ namespace WindowsVirtualDesktopHelper {
 			_thread = new Thread(_serve) { IsBackground = true, Name = "ControlServer" };
 			_thread.Start();
 			Util.Logging.WriteLine("ControlServer: listening on pipe " + PipeName);
+			// Lets clients (the Command Palette extension) offer to start the app when it isn't running.
+			// Note: not a .config file, as all .config files in this folder are loaded as settings
+			try {
+				System.IO.File.WriteAllText(System.IO.Path.Combine(Settings.GetConfigDirectory(), "app-path.txt"), System.Windows.Forms.Application.ExecutablePath);
+			} catch (Exception e) {
+				Util.Logging.WriteLine("ControlServer: could not write app-path.txt: " + e.Message);
+			}
 		}
 
 		private static void _serve() {

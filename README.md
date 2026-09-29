@@ -29,6 +29,28 @@ This builds `dist\WindowsVirtualDesktopHelper.exe` with just the .NET SDK (no Vi
 - Optional switch overlay and permanent status overlay
 - A notification when a hotkey can't be registered because another app uses it
 
+## Command Palette extension
+
+`CommandPalette\` contains a PowerToys Command Palette extension (needs the app running and Windows Developer Mode):
+
+```
+powershell -ExecutionPolicy Bypass -File CommandPalette\build.ps1
+```
+
+Then run **Reload** in Command Palette. Commands: *Virtual desktops* (switch, rename, close, new), *Find window on any desktop* (Enter jumps to it; more actions: move, pin, pin app, always show, bring app windows here), *Pin windows to all desktops* (checklist), *Move window to desktop*, *Move window to a new desktop*, *Show window on all desktops*, *New desktop*, and *Switch to &lt;desktop name&gt;* for every desktop.
+
+## Control from other tools
+
+The running app accepts commands (from scripts, AutoHotkey, a Stream Deck, ...):
+
+```
+WindowsVirtualDesktopHelper.exe --switch 2
+WindowsVirtualDesktopHelper.exe --action MoveWindowForward
+WindowsVirtualDesktopHelper.exe --send "{\"cmd\":\"new\"}"
+```
+
+Actions: `DesktopForward`, `DesktopBackward`, `PreviousDesktop`, `Desktop1`..`Desktop9`, `MoveWindowForward`, `MoveWindowBackward`, `MoveWindowToDesktop1`..`9`, `MoveWindowToNewDesktop`, `TogglePinWindow`, `TogglePinApp`, `GatherAppWindows`, `NewDesktop`. The protocol (a per-user named pipe, one JSON line per request) is documented in `Source\App\ControlServer.cs`.
+
 ## Config
 
 `%APPDATA%\WindowsVirtualDesktopHelper\WindowsVirtualDesktopHelper.exe.config` (tray menu: Options > Open config folder). Changes apply immediately. All options: tray menu > About > Show Config, or [Documentation/Settings.md](Documentation/Settings.md), [Hotkeys](Documentation/Hotkeys.md), [Actions](Documentation/Actions.md).
