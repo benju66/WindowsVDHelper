@@ -11,6 +11,7 @@ public sealed partial class VirtualDesktopsCommandsProvider : CommandProvider, I
     private ICommandItem[]? _cached;
     private string _desktopsSignature = string.Empty;
     private readonly Timer _refreshTimer;
+    private readonly IFallbackCommandItem[] _fallbacks = [new GoToWindowFallback()];
 
     public VirtualDesktopsCommandsProvider()
     {
@@ -82,6 +83,9 @@ public sealed partial class VirtualDesktopsCommandsProvider : CommandProvider, I
             return _cached;
         }
     }
+
+    /// <summary>"Go to window" in the main search (see GoToWindowFallback).</summary>
+    public override IFallbackCommandItem[] FallbackCommands() => _fallbacks;
 
     private void RefreshIfDesktopsChanged()
     {

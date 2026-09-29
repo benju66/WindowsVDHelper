@@ -1,5 +1,6 @@
 using CmdPalVirtualDesktops.Pages;
 using System.Diagnostics;
+using Windows.System;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 
@@ -102,19 +103,26 @@ internal static class Items
         return new Tag(DesktopName(status, w.Desktop)) { ToolTip = w.Desktop == status.Current ? "On this desktop" : "On another desktop" };
     }
 
+    // Ctrl (+ Shift) + key, for the actions on the selected window (work without opening the context menu)
+    private static KeyChord Key(VirtualKey key, bool shift = false) => KeyChordHelpers.FromModifiers(ctrl: true, shift: shift, vkey: key);
+
+    /// <summary>The section a window is listed in: this desktop first, then each desktop, then all desktops.</summary>
+    public static string Section(StatusInfo status, WindowInfo w) =>
+        w.OnAllDesktops ? "On all desktops" : w.Desktop == status.Current ? $"This desktop  ·  {DesktopName(status, w.Desktop)}" : w.Desktop >= 0 ? DesktopName(status, w.Desktop) : "Other";
+
     /// <summary>The actions for a window (the context menu in the window lists).</summary>
     public static IContextItem[] WindowCommands(StatusInfo status, WindowInfo w, Action refresh)
     {
         var list = new List<IContextItem>
         {
-            new CommandContextItem(new MoveWindowPage(w)) { Title = "Move to desktop...", Icon = new IconInfo(Glyphs.Move) },
-            new CommandContextItem(new HelperCommand("Move to a new desktop", Glyphs.Add, () => Helper.MoveToNewDesktop(w.Hwnd))),
+            new CommandContextItem(new MoveWindowPage(w)) { Title = "Move to desktop...", Icon = new IconInfo(Glyphs.Move), RequestedShortcut = Key(VirtualKey.M) },
+            new CommandContextItem(new HelperCommand("Move to a new desktop", Glyphs.Add, () => Helper.MoveToNewDesktop(w.Hwnd))) { RequestedShortcut = Key(VirtualKey.N) },
             new CommandContextItem(new HelperCommand(w.Pinned ? "Stop showing on all desktops" : "Show on all desktops", w.Pinned ? Glyphs.Unpin : Glyphs.Pin, () =>
             {
                 var pinned = Helper.SetPinned(w.Hwnd, !w.Pinned);
                 refresh();
                 return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"\"{w.Title}\" is shown on all desktops" : $"\"{w.Title}\" unpinned", Result = CommandResult.KeepOpen() });
-            })),
+            })) { RequestedShortcut = Key(VirtualKey.P) },
         };
 
         if (!string.IsNullOrEmpty(w.App))
@@ -124,14 +132,14 @@ internal static class Items
                 var pinned = Helper.SetAppPinned(w.Hwnd, !w.AppPinned);
                 refresh();
                 return CommandResult.ShowToast(new ToastArgs { Message = pinned ? $"All {w.App} windows are shown on all desktops" : $"{w.App} unpinned", Result = CommandResult.KeepOpen() });
-            })));
+            })) { RequestedShortcut = Key(VirtualKey.P, shift: true) });
             list.Add(new CommandContextItem(new HelperCommand(w.AutoPinned ? $"Stop always showing {w.App} on all desktops" : $"Always show {w.App} on all desktops", Glyphs.Pin, () =>
             {
                 Helper.SetAutoPinned(w.Process, !w.AutoPinned);
                 refresh();
                 return CommandResult.ShowToast(new ToastArgs { Message = w.AutoPinned ? $"{w.App} is no longer shown on all desktops automatically" : $"{w.App} will always be shown on all desktops", Result = CommandResult.KeepOpen() });
-            })));
-            list.Add(new CommandContextItem(new HelperCommand($"Bring all {w.App} windows here", Glyphs.Gather, () => Helper.Gather(w.Hwnd))));
+            })) { RequestedShortcut = Key(VirtualKey.A, shift: true) });
+            list.Add(new CommandContextItem(new HelperCommand($"Bring all {w.App} windows here", Glyphs.Gather, () => Helper.Gather(w.Hwnd))) { RequestedShortcut = Key(VirtualKey.G) });
         }
 
         return [.. list];

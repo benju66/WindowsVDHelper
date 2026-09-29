@@ -15,7 +15,7 @@ internal sealed partial class WindowsPage : ListPage
         Name = "Open";
         Title = "Find window on any desktop";
         Icon = new IconInfo(Glyphs.Window);
-        PlaceholderText = "Type part of a window title or app name";
+        PlaceholderText = "Type part of a window title or app name  ·  Ctrl+M move, Ctrl+P pin";
     }
 
     public override IListItem[] GetItems()
@@ -35,9 +35,10 @@ internal sealed partial class WindowsPage : ListPage
                 .Select(w => (IListItem)new ListItem(new HelperCommand("Go to window", Glyphs.Window, () => Helper.Focus(w.Hwnd)))
                 {
                     Title = w.Title,
-                    Subtitle = $"{w.App}  ·  {Items.Where(status, w)}",
+                    Subtitle = w.App,
                     Icon = Items.WindowIcon(w),
-                    Tags = [Items.DesktopTag(status, w)],
+                    Section = Items.Section(status, w),
+                    Tags = w.OnAllDesktops ? [Items.DesktopTag(status, w)] : [],
                     MoreCommands = status.Extended ? Items.WindowCommands(status, w, () => RaiseItemsChanged()) : [],
                 })];
         }
@@ -81,6 +82,7 @@ internal sealed partial class PinWindowsPage : ListPage
                     Title = w.Title,
                     Subtitle = w.Pinned ? $"{w.App}  ·  shown on all desktops" : w.AppPinned ? $"{w.App}  ·  all windows of this app are shown on all desktops" : $"{w.App}  ·  {Items.Where(status, w)}",
                     Icon = Items.WindowIcon(w),
+                    Section = w.Pinned ? "Pinned" : Items.Section(status, w),
                     Tags = w.Pinned ? [new Tag("Pinned") { Icon = new IconInfo(Glyphs.Pin), ToolTip = "Shown on all desktops" }] : [],
                 })];
         }
