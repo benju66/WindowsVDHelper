@@ -16,6 +16,12 @@ namespace WindowsVirtualDesktopHelper {
 			// The tray menu gets the desktop list and actions added each time it opens, and is
 			// also available on the desktop name icon
 			this.notifyIconName.ContextMenuStrip = this.contextMenuStrip1;
+
+			// Windows 11 style for all menus of the app (see Util.ModernMenuRenderer)
+			ToolStripManager.Renderer = new Util.ModernMenuRenderer();
+			this.contextMenuStrip1.RenderMode = ToolStripRenderMode.ManagerRenderMode;
+			this.contextMenuStrip1.ShowCheckMargin = false;
+			this.contextMenuStrip1.ShowImageMargin = true;
 			this.contextMenuStrip1.Opening += contextMenuStrip1_Opening;
 			// Keep the menu open while pinning windows in the checklist (see App._buildPinChecklistMenu)
 			this.contextMenuStrip1.Closing += (s, e) => {
@@ -32,6 +38,11 @@ namespace WindowsVirtualDesktopHelper {
 					item.Dispose();
 				}
 				_dynamicMenuItems.Clear();
+				var iconSize = (int)Math.Round(16 * App.Instance.TrayDpi / 96.0);
+				this.contextMenuStrip1.ImageScalingSize = new Size(iconSize, iconSize);
+				this.toolStripMenuItemSettings.Image = Util.MenuIcons.Icon(Util.MenuIcons.Settings);
+				this.toolStripMenuItemAbout.Image = Util.MenuIcons.Icon(Util.MenuIcons.Info);
+				this.toolStripMenuItemExit.Image = Util.MenuIcons.Icon(Util.MenuIcons.Exit);
 				var items = App.Instance.BuildTrayMenuItems();
 				for (var i = 0; i < items.Count; i++) this.contextMenuStrip1.Items.Insert(i, items[i]);
 				_dynamicMenuItems.AddRange(items);
@@ -97,6 +108,7 @@ namespace WindowsVirtualDesktopHelper {
 			App.Instance.StartConfigWatcher();
 			ControlServer.Start();
 			App.Instance.UpdateTrayMouseWheel();
+			App.Instance.UpdateTitleBarMenuHook();
 			try { App.Instance.ApplyAutoPinToAllWindows(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error applying auto pin: " + ex.Message); }
 			App.Instance.NotifyHotKeyConflicts();
 		}

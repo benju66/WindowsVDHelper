@@ -129,6 +129,11 @@ namespace WindowsVirtualDesktopHelper {
 			// Feature: apps which are always shown on all desktops
 			RegisterDefault("feature.autoPin.apps", "", "Comma separated process names (e.g. \"Spotify, ms-teams\") of apps which are automatically shown on all desktops", "v2.2");
 
+			// Feature: window menu (desktop actions for a window, at the mouse cursor)
+			RegisterDefault("feature.useHotKeyToShowWindowMenu", true, "Open the window menu (move, pin, ...) for the active window", "v2.2");
+			RegisterDefault("feature.useHotKeyToShowWindowMenu.hotkey", "Ctrl + Shift + Win + M");
+			RegisterDefault("feature.windowMenu.titleBarCtrlRightClick", true, "Ctrl + right-click on a window's title bar opens the window menu", "v2.2");
+
 			// Feature: mouse wheel over the tray icons switches desktops
 			RegisterDefault("feature.mouseWheelOnTrayIcons", true, "Scroll the mouse wheel over the tray icons to switch desktops", "v2.2");
 

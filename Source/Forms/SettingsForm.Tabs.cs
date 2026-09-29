@@ -66,6 +66,7 @@ namespace WindowsVirtualDesktopHelper {
 
 			layout.Controls.Add(Heading("Moving windows"));
 			layout.Controls.Add(Option("Switch along when moving a window to another desktop", "feature.moveWindow.follow"));
+			layout.Controls.Add(Option("Ctrl + right-click a window's title bar opens its window menu", "feature.windowMenu.titleBarCtrlRightClick"));
 
 			layout.Controls.Add(Heading("Tray icon"));
 			layout.Controls.Add(Option("Color the desktop number per desktop", "feature.colorIconsPerDesktop"));
@@ -175,6 +176,7 @@ namespace WindowsVirtualDesktopHelper {
 			AddShortcutRow(table, "feature.useHotKeyToTogglePinWindow", "Show it on all desktops", false);
 			AddShortcutRow(table, "feature.useHotKeyToTogglePinApp", "Show all windows of its app on all desktops", false);
 			AddShortcutRow(table, "feature.useHotKeyToGatherAppWindows", "Bring all windows of its app here", false);
+			AddShortcutRow(table, "feature.useHotKeyToShowWindowMenu", "Open its window menu (move, pin, ...)", false);
 			layout.Controls.Add(table);
 
 			var reset = new Button { Text = "Reset all shortcuts to defaults", AutoSize = true, Margin = new Padding(3, 14, 3, 3) };
