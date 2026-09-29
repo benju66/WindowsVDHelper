@@ -17,6 +17,10 @@ namespace WindowsVirtualDesktopHelper {
 			// also available on the desktop name icon
 			this.notifyIconName.ContextMenuStrip = this.contextMenuStrip1;
 			this.contextMenuStrip1.Opening += contextMenuStrip1_Opening;
+			// Keep the menu open while pinning windows in the checklist (see App._buildPinChecklistMenu)
+			this.contextMenuStrip1.Closing += (s, e) => {
+				if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && App.Instance.KeepTrayMenuOpen) e.Cancel = true;
+			};
 		}
 
 		private readonly System.Collections.Generic.List<ToolStripItem> _dynamicMenuItems = new System.Collections.Generic.List<ToolStripItem>();
@@ -156,7 +160,6 @@ namespace WindowsVirtualDesktopHelper {
 			if(tag == "exit") App.Instance.Exit();
 			else if(tag == "settings") App.Instance.ShowSettings();
 			else if(tag == "about") App.Instance.ShowAbout();
-			else if(tag == "donate") App.Instance.OpenDonatePage();
 		}
 
 		// Note: NotifyIcon.Click is raised for right-clicks too, so we use MouseClick and check the button.

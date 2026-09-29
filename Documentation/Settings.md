@@ -1,6 +1,6 @@
 ﻿# Windows Virtual Desktop Helper
 
-Back to [Home](https://github.com/dankrusi/WindowsVirtualDesktopHelper)
+Back to [Home](../README.md)
 
 ## Settings Documentation
 
@@ -88,5 +88,5 @@ Command line arguments take precedence over the config file settings.
 
 ### Custom Hotkey Settings
 
-See [Hotkeys Documentation](https://github.com/dankrusi/WindowsVirtualDesktopHelper/blob/main/Documentation/Hotkeys.md)
+See [Hotkeys Documentation](Hotkeys.md)
 for more information on how to define custom hotkeys.

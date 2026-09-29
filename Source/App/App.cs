@@ -846,6 +846,10 @@ namespace WindowsVirtualDesktopHelper {
 					pinItem.Click += (s, e) => TogglePinWindow(hwnd);
 					items.Add(pinItem);
 				}
+
+				// Checklist of all open windows, to pin several windows in one go
+				items.Add(new ToolStripSeparator());
+				items.Add(_buildPinChecklistMenu(names));
 			}
 
 			// Quick options
@@ -864,6 +868,67 @@ namespace WindowsVirtualDesktopHelper {
 			items.Add(options);
 			items.Add(new ToolStripSeparator());
 			return items;
+		}
+
+		// Set while a click in the pin checklist is being handled, so the tray menu stays open (see AppForm)
+		public bool KeepTrayMenuOpen = false;
+
+		// "Pin windows to all desktops" submenu: every open window with a checkmark when pinned. Clicking toggles
+		// the pin and keeps the menu open, so several windows can be pinned/unpinned in a row. The list is built
+		// when the submenu opens (it needs one API call per window).
+		private ToolStripMenuItem _buildPinChecklistMenu(List<string> desktopNames) {
+			var menu = new ToolStripMenuItem("Pin windows to all desktops");
+			menu.DropDownItems.Add(new ToolStripMenuItem("(loading...)") { Enabled = false }); // so the submenu arrow shows
+			menu.DropDown.Closing += (s, e) => {
+				if(e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && KeepTrayMenuOpen) e.Cancel = true;
+			};
+			menu.DropDownOpening += (s, e) => {
+				menu.DropDownItems.Clear();
+				var ext = VDAPIExtended;
+				if(ext == null) return;
+				var current = (int)this.CurrentVDDisplayNumber;
+				var entries = new List<Tuple<IntPtr, string, int, bool>>();
+				foreach(var hwnd in Util.OS.GetAppWindows()) {
+					if(!_isUserWindow(hwnd)) continue;
+					bool pinned;
+					try { pinned = ext.IsWindowPinned(hwnd); } catch(Exception) { continue; } // not a normal app window
+					var desktop = pinned ? -1 : ext.GetWindowDesktop(hwnd);
+					entries.Add(Tuple.Create(hwnd, Util.OS.GetHandleWndName(hwnd), desktop, pinned));
+					if(entries.Count >= 60) break;
+				}
+				// Pinned first, then the current desktop, then the other desktops in order
+				var sorted = entries.OrderBy(t => t.Item4 ? -2 : (t.Item3 == current ? -1 : (t.Item3 < 0 ? int.MaxValue : t.Item3))).ToList();
+				if(sorted.Count == 0) {
+					menu.DropDownItems.Add(new ToolStripMenuItem("(no windows)") { Enabled = false });
+					return;
+				}
+				foreach(var entry in sorted) {
+					var hwnd = entry.Item1;
+					var title = entry.Item2;
+					if(title.Length > 50) title = title.Substring(0, 47) + "...";
+					title = title.Replace("&", "&&");
+					if(!entry.Item4 && entry.Item3 >= 0 && entry.Item3 != current) {
+						var desktopName = entry.Item3 < desktopNames.Count ? desktopNames[entry.Item3] : $"Desktop {entry.Item3 + 1}";
+						title += $"    ({desktopName})";
+					}
+					var item = new ToolStripMenuItem(title) { Checked = entry.Item4, CheckOnClick = false };
+					item.Click += (s2, e2) => {
+						KeepTrayMenuOpen = true;
+						try {
+							var pinned = !ext.IsWindowPinned(hwnd);
+							ext.SetWindowPinned(hwnd, pinned);
+							item.Checked = pinned;
+							Util.Logging.WriteLine($"App: {(pinned ? "pinned" : "unpinned")} window \"{entry.Item2}\"");
+						} catch(Exception ex) {
+							Util.Logging.WriteLine("App: Error: could not pin/unpin window: " + ex.Message);
+						}
+						// Reset after the menu's close attempt for this click has been cancelled
+						_postToUI(() => KeepTrayMenuOpen = false);
+					};
+					menu.DropDownItems.Add(item);
+				}
+			};
+			return menu;
 		}
 
 		private ToolStripMenuItem _optionMenuItem(string text, string setting) {
@@ -1440,18 +1505,6 @@ namespace WindowsVirtualDesktopHelper {
 			}
 			Application.Exit();
 			System.Environment.Exit(0);
-		}
-
-		public void OpenEmailContact() {
-			App.Instance.OpenURL("mailto:dan@dankrusi.com");
-		}
-
-		public void OpenAboutPage() {
-			App.Instance.OpenURL("https://github.com/dankrusi/WindowsVirtualDesktopHelper");
-		}
-
-		public void OpenDonatePage() {
-			App.Instance.OpenURL("https://www.paypal.com/donate/?hosted_button_id=BG5FYMAHFG9V6");
 		}
 
 		#endregion

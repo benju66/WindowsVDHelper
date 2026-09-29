@@ -78,7 +78,7 @@ namespace WindowsVirtualDesktopHelper {
             this.buttonOpenIssue.Name = "buttonOpenIssue";
             this.buttonOpenIssue.Size = new System.Drawing.Size(257, 42);
             this.buttonOpenIssue.TabIndex = 4;
-            this.buttonOpenIssue.Text = "Open Issue on GitHub";
+            this.buttonOpenIssue.Text = "Copy Details";
             this.buttonOpenIssue.UseVisualStyleBackColor = true;
             this.buttonOpenIssue.Click += new System.EventHandler(this.buttonOpenIssue_Click);
             // 
@@ -89,7 +89,7 @@ namespace WindowsVirtualDesktopHelper {
             this.button1.Name = "button1";
             this.button1.Size = new System.Drawing.Size(257, 42);
             this.button1.TabIndex = 5;
-            this.button1.Text = "View Issues on GitHub";
+            this.button1.Text = "Open Log Folder";
             this.button1.UseVisualStyleBackColor = true;
             this.button1.Click += new System.EventHandler(this.button1_Click);
             // 

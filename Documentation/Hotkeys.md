@@ -1,6 +1,6 @@
 # Windows Virtual Desktop Helper
 
-Back to [Home](https://github.com/dankrusi/WindowsVirtualDesktopHelper)
+Back to [Home](../README.md)
 
 ## Hotkeys Documentation
 
@@ -32,10 +32,10 @@ Hotkey settings always define an action:
 - ``DesktopBackward``
 - ``PreviousDesktop``
 
-See [Actions Documentation](https://github.com/dankrusi/WindowsVirtualDesktopHelper/blob/main/Documentation/Actions.md)
+See [Actions Documentation](Actions.md)
 for more information on actions.
 
-See [Settings Documentation](https://github.com/dankrusi/WindowsVirtualDesktopHelper/blob/main/Documentation/Settings.md)
+See [Settings Documentation](Settings.md)
 for how to change the custom configuration.
 
 Note: A hotkey MUST have at least one modifier key (Ctrl, Alt, Shift, Win) and one regular key (A-Z, 0-9, etc). This is due to the nature of the Windows API for global key bindings (for obvious reasons it should not be possible to globally bind just the A key...).

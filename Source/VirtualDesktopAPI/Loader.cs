@@ -51,7 +51,6 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI {
 				Util.Logging.WriteLine("GetImplementationForOS: Detected Windows 11 Insider due to build >= 25158-5267");
 				return VirtualDesktopWin11_Insider;
 			} else if (currentBuild >= 23403) {
-				// https://github.com/dankrusi/WindowsVirtualDesktopHelper/issues/35#issuecomment-1626892575
 				Util.Logging.WriteLine("GetImplementationForOS: Detected Windows 11 Insider due to build >= 23403 ");
 				return VirtualDesktopWin11_Insider;
 			} 

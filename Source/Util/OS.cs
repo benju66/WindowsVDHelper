@@ -64,6 +64,51 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 		#endregion
 
+		#region App Windows
+
+		private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+		[DllImport("user32.dll")]
+		private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+		[DllImport("user32.dll")]
+		private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+		[DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+		private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+		[DllImport("dwmapi.dll")]
+		private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+		private const uint GW_OWNER = 4;
+		private const int GWL_EXSTYLE = -20;
+		private const int WS_EX_TOOLWINDOW = 0x00000080;
+		private const int WS_EX_APPWINDOW = 0x00040000;
+		private const int DWMWA_CLOAKED = 14;
+		private const int DWM_CLOAKED_APP = 1;
+
+		// The top level windows the user would see in Alt+Tab, on all desktops (windows on other desktops
+		// are hidden by the shell, "cloaked", but still listed), in z-order (most recently used first)
+		public static System.Collections.Generic.List<IntPtr> GetAppWindows() {
+			var windows = new System.Collections.Generic.List<IntPtr>();
+			EnumWindows((hWnd, lParam) => {
+				if (!IsWindowVisible(hWnd)) return true;
+				if (GetWindowTextLength(hWnd) == 0) return true;
+				var exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
+				var owner = GetWindow(hWnd, GW_OWNER);
+				if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
+				if (owner != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return true;
+				int cloaked;
+				// Cloaked by the app itself (e.g. suspended store app frames) means not really open
+				if (DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked == DWM_CLOAKED_APP) return true;
+				windows.Add(hWnd);
+				return true;
+			}, IntPtr.Zero);
+			return windows;
+		}
+
+		#endregion
+
 		#region DPI
 
 		// The DPI of the (primary) taskbar, which is what the tray icons are rendered for. Returns 0 if unknown.

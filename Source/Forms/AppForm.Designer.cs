@@ -29,7 +29,6 @@ namespace WindowsVirtualDesktopHelper {
             this.notifyIconNumber = new System.Windows.Forms.NotifyIcon(this.components);
             this.contextMenuStrip1 = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.toolStripMenuItemAbout = new System.Windows.Forms.ToolStripMenuItem();
-            this.toolStripMenuItemDonate = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripMenuItemSettings = new System.Windows.Forms.ToolStripMenuItem();
             this.toolStripMenuItemExit = new System.Windows.Forms.ToolStripMenuItem();
             this.notifyIconPrev = new System.Windows.Forms.NotifyIcon(this.components);
@@ -51,7 +50,6 @@ namespace WindowsVirtualDesktopHelper {
             this.contextMenuStrip1.ImageScalingSize = new System.Drawing.Size(28, 28);
             this.contextMenuStrip1.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.toolStripMenuItemAbout,
-            this.toolStripMenuItemDonate,
             this.toolStripMenuItemSettings,
             this.toolStripMenuItemExit});
             this.contextMenuStrip1.Name = "contextMenuStrip1";
@@ -64,13 +62,6 @@ namespace WindowsVirtualDesktopHelper {
             this.toolStripMenuItemAbout.Size = new System.Drawing.Size(160, 36);
             this.toolStripMenuItemAbout.Tag = "about";
             this.toolStripMenuItemAbout.Text = "About";
-            // 
-            // toolStripMenuItemDonate
-            // 
-            this.toolStripMenuItemDonate.Name = "toolStripMenuItemDonate";
-            this.toolStripMenuItemDonate.Size = new System.Drawing.Size(160, 36);
-            this.toolStripMenuItemDonate.Tag = "donate";
-            this.toolStripMenuItemDonate.Text = "Donate";
             // 
             // toolStripMenuItemSettings
             // 
@@ -135,7 +126,6 @@ namespace WindowsVirtualDesktopHelper {
 		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemAbout;
 		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemExit;
 		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemSettings;
-		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemDonate;
 		public System.Windows.Forms.NotifyIcon notifyIconNumber;
 		public System.Windows.Forms.ContextMenuStrip contextMenuStrip1;
 		public System.Windows.Forms.NotifyIcon notifyIconPrev;

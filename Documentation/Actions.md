@@ -1,6 +1,6 @@
 # Windows Virtual Desktop Helper
 
-Back to [Home](https://github.com/dankrusi/WindowsVirtualDesktopHelper)
+Back to [Home](../README.md)
 
 ## Action Documentation
 

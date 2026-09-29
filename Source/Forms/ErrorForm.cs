@@ -80,40 +80,17 @@ namespace WindowsVirtualDesktopHelper {
 			System.Environment.Exit(1);
 		}
 
-		public void OpenIssueOnGithub() {
-			var url = "https://github.com/dankrusi/WindowsVirtualDesktopHelper/issues/new";
-			url += $"?title={Uri.EscapeDataString($"WVDH v{GetAppBuildVersion()} / {GetWindowsProductName()} {GetWindowsDisplayVersion()} {GetWindowsBuildVersion()} / Error: {this.labelError.Text}")}";
-			// The details go into the URL, and browsers/ShellExecute fail on very long URLs, so we keep
-			// only the tail (the most recent lines are the relevant ones) and say so
-			var details = this.textBoxDetails.Text ?? "";
-			const int maxDetailsChars = 2500;
-			if(details.Length > maxDetailsChars) details = "[...truncated...]\n" + details.Substring(details.Length - maxDetailsChars);
-			url += $"&body={Uri.EscapeDataString("\n\n" + details)}";
-			Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-		}
-
 		private void buttonOpenIssue_Click(object sender, EventArgs e) {
-
-			string message = "Before filing a GitHub issue, please make sure of the following:";
-			message += "\n";
-			message += "\n- You are using the latest version";
-			message += "\n- Your issue doesn't already exist";
-			message += "\n- You are not using patched versions of Windows";
-			message += "\n";
-			message += "\nContinue?";
-			string title = "Issue Checklist";
-			MessageBoxButtons buttons = MessageBoxButtons.YesNo;
-			DialogResult result = MessageBox.Show(message, title, buttons);
-			if (result == DialogResult.Yes) {
-				OpenIssueOnGithub();
-			} else {
-				//this.Close();
+			try {
+				Clipboard.SetText(this.textBoxDetails.Text);
+			} catch (Exception) {
+				// the clipboard can be locked by another app
 			}
-
 		}
 
 		private void button1_Click(object sender, EventArgs e) {
-			Process.Start(new ProcessStartInfo("https://github.com/dankrusi/WindowsVirtualDesktopHelper/issues") { UseShellExecute = true });
+			var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WindowsVirtualDesktopHelper");
+			if (System.IO.Directory.Exists(dir)) Process.Start(new ProcessStartInfo(dir) { UseShellExecute = true });
 		}
 	}
 }
