@@ -2,6 +2,17 @@
 
 A tray app for Windows 11 virtual desktops: shows the current desktop in the tray, switches instantly, and lets you manage desktops and windows from the tray menu or with hotkeys.
 
+## Install
+
+1. Download `WindowsVDHelper-<version>.zip` from [Releases](https://github.com/benju66/WindowsVDHelper/releases) and unzip it.
+2. Double-click **Install.cmd** (no admin rights needed).
+
+It installs to `%LOCALAPPDATA%\Programs\WindowsVDHelper`, adds **Windows VD Helper** to the Start menu, starts with Windows, and starts the app. Run Install.cmd again to update; **Uninstall.cmd** removes it (your settings are kept).
+
+From the source code, double-click **Install.cmd** in the repository root instead: it builds the app first (needs the [.NET SDK](https://dotnet.microsoft.com/download)) and can also install the Command Palette extension.
+
+The desktop and window features (moving, pinning, the panel's window actions, the Command Palette extension) need Windows 11 24H2 or later.
+
 ## Build
 
 Close the app first (the running exe is locked), then:

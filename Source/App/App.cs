@@ -1821,6 +1821,16 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		public bool IsStartupWithWindowsEnabled() {
+			try {
+				using(var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false)) {
+					return key != null && key.GetValue(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyTitleAttribute>().Title) != null;
+				}
+			} catch(Exception) {
+				return Settings.GetBool("general.startupWithWindows");
+			}
+		}
+
 		public void DisableStartupWithWindows() {
 			// https://stackoverflow.com/questions/674628/how-do-i-set-a-program-to-launch-at-startup
 			try {

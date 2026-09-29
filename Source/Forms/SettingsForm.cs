@@ -34,7 +34,8 @@ namespace WindowsVirtualDesktopHelper {
 
 			this.checkBoxShowPrevNextIcons.Checked = Settings.GetBool("feature.showPrevNextIcons");
 			this.checkBoxShowDesktopNameInitial.Checked = Settings.GetBool("feature.showDesktopNameInIconTray");
-			this.checkBoxStartupWithWindows.Checked = Settings.GetBool("general.startupWithWindows");
+			// The actual Windows startup entry (e.g. set by the installer), not just the remembered setting
+			this.checkBoxStartupWithWindows.Checked = App.Instance.IsStartupWithWindowsEnabled();
 
 			this.checkBoxShowOverlay.Checked = Settings.GetBool("feature.showDesktopSwitchOverlay");
 			this.checkBoxOverlayAnimate.Checked = Settings.GetBool("feature.showDesktopSwitchOverlay.animate");
