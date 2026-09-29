@@ -46,12 +46,14 @@ namespace WindowsVirtualDesktopHelper {
 
 		#region Private/Internal Properties
 
-		private KeyboardHook KeyboardHooksJumpToDesktop = null;
 		private KeyboardHook _keyboardHooks = null;
 		private List<HotKeyAction> _keyboardHooksHotKeysAndActions = new List<HotKeyAction>(); // the registered hotkey actions
+		// Note: the following are written by monitor threads and read by the UI thread, so all access is guarded by locks
+		private readonly object _focusLock = new object();
 		private Dictionary<int, IntPtr> VDDToLastFocusedWin = new Dictionary<int, IntPtr>();
 		public IntPtr LastForegroundhWnd = IntPtr.Zero; //TODO: this should be private
-		public List<string> FGWindowHistory = new List<string>(); //TODO: this should be private // needed to detect if Task View was open
+		private readonly object _fgHistoryLock = new object();
+		private List<KeyValuePair<int, string>> FGWindowHistory = new List<KeyValuePair<int, string>>(); // (tick when it became foreground, window name), needed to detect if Task View was open
 		private List<int> _desktopNumberHistory = new List<int>(); // stores a list of most recent desktop numbers used
 
 		#endregion
@@ -72,13 +74,8 @@ namespace WindowsVirtualDesktopHelper {
 			//throw new Exception("test exception!");
 
 			// Load the implementation
-			try {
-				this.LoadVDAPI();
-				this.LoadVDDisplayInfo();
-				//throw new Exception("Test error", new Exception("Test inner error"));
-			} catch (Exception e) {
-				throw e;
-			}
+			this.LoadVDAPI();
+			this.LoadVDDisplayInfo();
 
 			// Load theme
 			this.CurrentSystemThemeName = this.GetSystemThemeName();
@@ -120,7 +117,11 @@ namespace WindowsVirtualDesktopHelper {
 
 		public uint GetVDDisplayNumber(bool throwException) {
 			try {
-				return this.VDAPI.Current();
+				var number = this.VDAPI.Current();
+				// The implementations cast an index of -1 (desktop not found, e.g. removed mid-enumeration)
+				// to uint, which must never be mistaken for a real desktop number
+				if(number == uint.MaxValue) throw new InvalidOperationException("the current desktop could not be found");
+				return number;
 			} catch (Exception e) {
 				if (throwException) throw new Exception("GetVDDisplayNumber: could not get current display number: " + e.Message, e);
 				else return 0;
@@ -142,17 +143,15 @@ namespace WindowsVirtualDesktopHelper {
 
 		public void MonitorVDisplayCount() {
 			var thread = new Thread(new ThreadStart(_MonitorVDDisplayCount));
+			thread.IsBackground = true; // never keep the process alive on its own
 			thread.Start();
 		}
 		private void _MonitorVDDisplayCount() {
 			while(true) {
 				try {
-					var newCurrentVDDisplayCount = this.GetVDDisplayCount();
-					if(newCurrentVDDisplayCount != CurrentVDDisplayCount) {
-						CurrentVDDisplayCount = newCurrentVDDisplayCount;
-						//Debug.WriteLine("Update Count: " + Thread.CurrentThread.ManagedThreadId);
-					}
-					System.Threading.Thread.Sleep(100);
+					_checkForDesktopCountChange();
+					// With shell notifications active, this poll is only a safety net
+					System.Threading.Thread.Sleep(_vdNotificationsActive ? 2000 : 100);
 				} catch(Exception e) {
 					Util.Logging.WriteLine("App: Error: MonitorVDDisplayCount: " + e.Message);
 					System.Threading.Thread.Sleep(1000);
@@ -162,26 +161,36 @@ namespace WindowsVirtualDesktopHelper {
 
 		public void MonitorVDSwitch() {
 			var thread = new Thread(new ThreadStart(_MonitorVDSwitch));
-			//var thread2 = new Thread(new ThreadStart(delegate { UpdateSettingFormSafe(); }));
+			thread.IsBackground = true;
 			thread.Start();
-			//thread2.Start();
+		}
+
+		private void _refreshNextPrevIconsSafe() {
+			try {
+				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return;
+				this.AppForm.BeginInvoke((Action)(() => {
+					try {
+						this.UIUpdateNextPrevIconVisibility(this.CurrentSystemThemeName);
+						this.UIUpdateTooltips();
+					} catch(Exception e) {
+						Util.Logging.WriteLine("App: Error: refreshing prev/next icons: " + e.Message);
+					}
+				}));
+			} catch(Exception e) {
+				// e.g. the form is being closed while the app exits
+				Util.Logging.WriteLine("App: Error: could not refresh prev/next icons: " + e.Message);
+			}
 		}
 		private void _MonitorVDSwitch() {
 			while(true) {
 				try {
 					// Throw on error, so that a failure is not mistaken for desktop number 0 and
 					// so that a stale API connection can be detected and recovered in the catch below
-					var newVDDisplayNumber = this.GetVDDisplayNumber(true);
+					_checkForDesktopSwitch(false);
 					_vdApiFailureCount = 0;
-					if(newVDDisplayNumber != this.CurrentVDDisplayNumber) {
-						this.CurrentVDDisplayName = this.GetVDDisplayName(false);
-						this.CurrentVDDisplayNumber = newVDDisplayNumber;
-						//Util.Logging.WriteLine("Switched to " + this.CurrentVDDisplayNumber);
-						VDSwitchedSafe();
-					} else {
-						//storeLastWinFocused();
-					}
-					System.Threading.Thread.Sleep(100);
+					// With shell notifications active, switches are handled instantly and this poll is only a
+					// safety net (e.g. for a missed notification), so it can run much less often
+					System.Threading.Thread.Sleep(_vdNotificationsActive ? 1000 : 100);
 				} catch(Exception e) {
 					Util.Logging.WriteLine("App: Error: MonitorVDSwitch: " + e.Message);
 					_tryReconnectVDAPI();
@@ -205,10 +214,131 @@ namespace WindowsVirtualDesktopHelper {
 				this.VDAPI.Reconnect();
 				this.VDAPI.Current(); // test the connection
 				Util.Logging.WriteLine("App: MonitorVDSwitch: reconnect successful");
+				// The notification registration died with the old explorer, so register again
+				_postToUI(StartVDNotifications);
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: MonitorVDSwitch: could not reconnect to the virtual desktop API: " + e.Message);
 			}
 		}
+
+		// Checks if the current desktop (or its name) changed, and if so updates the state and UI.
+		// Called from the polling thread and (on the UI thread) from shell notifications, so the
+		// check-and-set is locked to make sure a switch is only handled once. Throws on API errors.
+		// Note: the COM calls are made outside the lock - the COM objects belong to the UI thread, so a
+		// call from the polling thread may need the UI thread, which must never be waiting on this lock
+		private void _checkForDesktopSwitch(bool checkName) {
+			bool switched = false, renamed = false;
+			var newVDDisplayNumber = this.GetVDDisplayNumber(true);
+			// The name is an extra (enumerating) API call, so only fetch it when it can matter
+			var newName = (checkName || newVDDisplayNumber != this.CurrentVDDisplayNumber) ? this.GetVDDisplayName(false) : null;
+			lock(_switchLock) {
+				if(newVDDisplayNumber != this.CurrentVDDisplayNumber) {
+					this.CurrentVDDisplayName = newName;
+					this.CurrentVDDisplayNumber = newVDDisplayNumber;
+					switched = true;
+				} else if(newName != null && newName != this.CurrentVDDisplayName) {
+					this.CurrentVDDisplayName = newName;
+					renamed = true;
+				}
+			}
+			if(switched && newName == null) this.CurrentVDDisplayName = this.GetVDDisplayName(false); // rare race with the other caller
+			if(switched) {
+				VDSwitchedSafe();
+			} else if(renamed) {
+				_postToUI(() => {
+					this.UIUpdateIcons();
+					this.UpdateStatusOverlayWindows();
+				});
+			}
+		}
+
+		private void _checkForDesktopCountChange() {
+			var newCurrentVDDisplayCount = this.GetVDDisplayCount();
+			if(newCurrentVDDisplayCount != CurrentVDDisplayCount) {
+				CurrentVDDisplayCount = newCurrentVDDisplayCount;
+				// The desktop count affects the prev/next icons (enabled state and visibility on bounds)
+				_refreshNextPrevIconsSafe();
+			}
+		}
+
+		#region Shell Notifications
+
+		private readonly object _switchLock = new object();
+		private VirtualDesktopAPI.Notifications _vdNotifications = null;
+		private volatile bool _vdNotificationsActive = false;
+
+		// Subscribes to the shell's desktop change notifications, so switches are shown instantly instead of
+		// on the next poll. Must run on the UI thread. If not supported/failing, polling keeps working as before.
+		public void StartVDNotifications() {
+			_vdNotificationsActive = false;
+			if(_vdNotifications != null) {
+				_vdNotifications.Changed -= _onVDNotification;
+				_vdNotifications.Dispose();
+				_vdNotifications = null;
+			}
+			if(!Settings.GetBool("feature.useShellNotifications")) {
+				Util.Logging.WriteLine("App: shell notifications disabled by setting, using polling");
+				return;
+			}
+			int build = 0;
+			try { build = Util.OS.GetWindowsBuildVersion(); } catch(Exception) { }
+			if(!VirtualDesktopAPI.Notifications.IsSupportedOnThisBuild(build)) {
+				Util.Logging.WriteLine("App: shell notifications not supported on build " + build + ", using polling");
+				return;
+			}
+			try {
+				var notifications = new VirtualDesktopAPI.Notifications();
+				notifications.Changed += _onVDNotification;
+				notifications.Register();
+				_vdNotifications = notifications;
+				_vdNotificationsActive = true;
+				Util.Logging.WriteLine("App: registered for shell virtual desktop notifications (instant updates)");
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: could not register for shell notifications, using polling: " + e.Message);
+			}
+		}
+
+		private void _onVDNotification(object sender, EventArgs e) {
+			// We are inside a call from the shell: never call back into it synchronously, post the work instead
+			_postToUI(() => {
+				try {
+					_checkForDesktopSwitch(true);
+					_checkForDesktopCountChange();
+				} catch(Exception ex) {
+					Util.Logging.WriteLine("App: Error: handling shell notification: " + ex.Message);
+				}
+			});
+		}
+
+		// Called when explorer.exe (re)starts, see AppForm.WndProc (TaskbarCreated)
+		public void OnExplorerRestarted() {
+			Util.Logging.WriteLine("App: explorer restarted, reconnecting to the virtual desktop API");
+			try {
+				this.VDAPI.Reconnect();
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: reconnecting after explorer restart: " + e.Message);
+			}
+			StartVDNotifications();
+			try {
+				_checkForDesktopSwitch(true);
+				_checkForDesktopCountChange();
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: refreshing after explorer restart: " + e.Message);
+			}
+			UIUpdate();
+		}
+
+		private void _postToUI(Action action) {
+			try {
+				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return;
+				this.AppForm.BeginInvoke(action);
+			} catch(Exception e) {
+				// e.g. the form is being closed while the app exits
+				Util.Logging.WriteLine("App: Error: could not post to UI thread: " + e.Message);
+			}
+		}
+
+		#endregion
 
 		public void VDSwitchedSafe() {
 			// Make sure we run on the main thread
@@ -222,22 +352,7 @@ namespace WindowsVirtualDesktopHelper {
 				this.UIUpdateNextPrevIconVisibility(this.CurrentSystemThemeName);
 				// Show notification overlay
 				if(Settings.GetBool("feature.showDesktopSwitchOverlay")) {
-					this.AppForm.Invoke((Action)(() => {
-						SwitchNotificationForm.CloseAllNotifications(this.AppForm);
-						if(Settings.GetBool("feature.showDesktopSwitchOverlay.showOnAllMonitors")) {
-							for(var i = 0; i < Screen.AllScreens.Length; i++) {
-								var form = new SwitchNotificationForm(i);
-								form.LabelText = this.CurrentVDDisplayName;
-								form.DisplayTimeMS = Settings.GetInt("feature.showDesktopSwitchOverlay.duration");
-								form.Show();
-							}
-						} else {
-							var form = new SwitchNotificationForm();
-							form.LabelText = this.CurrentVDDisplayName;
-							form.DisplayTimeMS = Settings.GetInt("feature.showDesktopSwitchOverlay.duration");
-							form.Show();
-						}
-					}));
+					ShowSwitchOverlays();
 				}
 				// Update permanent overlay
 				UpdateStatusOverlayWindows();
@@ -260,6 +375,7 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public void SwitchDesktopBackward() {
+			if(_wrapAroundTarget(-1, out int wrapTarget)) { SwitchToDesktop(wrapTarget); return; }
 			// We try the virtual desktop implementation API, but fallback to shortcut keys if it fails...
 			try {
 				VDAPI.SwitchBackward();
@@ -270,12 +386,30 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public void SwitchDesktopForward() {
+			if(_wrapAroundTarget(+1, out int wrapTarget)) { SwitchToDesktop(wrapTarget); return; }
 			// We try the virtual desktop implementation API, but fallback to shortcut keys if it fails...
 			try {
 				VDAPI.SwitchForward();
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: SwitchDesktopForward (VDAPI.SwitchForward()): " + e.Message);
 				Util.OS.DesktopForwardBySimulatingShortcutKey();
+			}
+		}
+
+		// With feature.wrapAround, going forward on the last desktop goes to the first and backward on the first to the last
+		private bool _wrapAroundTarget(int direction, out int target) {
+			target = -1;
+			try {
+				if(!Settings.GetBool("feature.wrapAround")) return false;
+				var count = this.GetVDDisplayCount();
+				var current = (int)this.GetVDDisplayNumber(true);
+				if(count < 2) return false;
+				if(direction > 0 && current == count - 1) target = 0;
+				else if(direction < 0 && current == 0) target = count - 1;
+				return target >= 0;
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: wrap around: " + e.Message);
+				return false;
 			}
 		}
 
@@ -305,24 +439,80 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// The overlay windows are re-used between switches (only the text is updated), instead of closing
+		// and re-creating them on every switch, which flickered when switching quickly. They are only
+		// re-created when something affecting their layout changed (settings, theme, monitors).
+		private List<SwitchNotificationForm> _switchOverlays = new List<SwitchNotificationForm>();
+		private string _switchOverlaysLayoutKey = null;
+		private List<OverlayForm> _statusOverlays = new List<OverlayForm>();
+		private string _statusOverlaysLayoutKey = null;
+
+		private string _getOverlayLayoutKey(string settingsPrefix, string themePrefix) {
+			var screens = Screen.AllScreens;
+			var key = new System.Text.StringBuilder();
+			key.Append(this.CurrentSystemThemeName);
+			foreach(var setting in new[] { settingsPrefix + ".showOnAllMonitors", settingsPrefix + ".position", settingsPrefix + ".animate", settingsPrefix + ".translucent" }) {
+				key.Append('|').Append(Settings.GetString(setting));
+			}
+			foreach(var setting in new[] { ".width", ".height", ".font", ".fontSize", ".overlayFG." + this.CurrentSystemThemeName, ".overlayBG." + this.CurrentSystemThemeName }) {
+				key.Append('|').Append(Settings.GetString(themePrefix + setting));
+			}
+			foreach(var screen in screens) key.Append('|').Append(screen.WorkingArea.ToString());
+			return key.ToString();
+		}
+
+		public void ShowSwitchOverlays() {
+			var text = this.CurrentVDDisplayName;
+			var duration = Settings.GetInt("feature.showDesktopSwitchOverlay.duration");
+			var layoutKey = _getOverlayLayoutKey("feature.showDesktopSwitchOverlay", "theme.overlay");
+			_switchOverlays.RemoveAll(f => f.IsDisposed || f.IsClosingOrClosed);
+			var wanted = Settings.GetBool("feature.showDesktopSwitchOverlay.showOnAllMonitors") ? Screen.AllScreens.Length : 1;
+			if(layoutKey == _switchOverlaysLayoutKey && _switchOverlays.Count == wanted) {
+				// Re-use: close anything else (e.g. the splash screen) but keep ours, and just update the text
+				SwitchNotificationForm.CloseAllNotificationsExcept(_switchOverlays);
+				foreach(var form in _switchOverlays) form.Restart(text, duration);
+				return;
+			}
+			// (Re)create
+			SwitchNotificationForm.CloseAllNotifications(this.AppForm);
+			_switchOverlays.Clear();
+			_switchOverlaysLayoutKey = layoutKey;
+			for(var i = 0; i < wanted; i++) {
+				var form = wanted > 1 ? new SwitchNotificationForm(i) : new SwitchNotificationForm();
+				form.LabelText = text;
+				form.DisplayTimeMS = duration;
+				form.Show();
+				_switchOverlays.Add(form);
+			}
+		}
+
 		public void UpdateStatusOverlayWindows() {
-			if(Settings.GetBool("feature.showDesktopStatusOverlay")) {
-				this.AppForm.Invoke((Action)(() => {
-					OverlayForm.CloseAllNotifications(this.AppForm);
-					if(Settings.GetBool("feature.showDesktopStatusOverlay.showOnAllMonitors")) {
-						for(var i = 0; i < Screen.AllScreens.Length; i++) {
-							var form = new OverlayForm(i);
-							form.LabelText = this.CurrentVDDisplayName;
-							form.Show();
-						}
-					} else {
-						var form = new OverlayForm();
-						form.LabelText = this.CurrentVDDisplayName;
-						form.Show();
-					}
-				}));
-			} else {
+			if(this.AppForm.InvokeRequired) {
+				this.AppForm.Invoke((Action)UpdateStatusOverlayWindows);
+				return;
+			}
+			if(!Settings.GetBool("feature.showDesktopStatusOverlay")) {
 				OverlayForm.CloseAllNotifications(this.AppForm);
+				_statusOverlays.Clear();
+				_statusOverlaysLayoutKey = null;
+				return;
+			}
+			var text = this.CurrentVDDisplayName;
+			var layoutKey = _getOverlayLayoutKey("feature.showDesktopStatusOverlay", "theme.status") + "|" + Settings.GetString("theme.status.offset");
+			_statusOverlays.RemoveAll(f => f.IsDisposed);
+			var wanted = Settings.GetBool("feature.showDesktopStatusOverlay.showOnAllMonitors") ? Screen.AllScreens.Length : 1;
+			if(layoutKey == _statusOverlaysLayoutKey && _statusOverlays.Count == wanted) {
+				foreach(var form in _statusOverlays) form.UpdateText(text);
+				return;
+			}
+			OverlayForm.CloseAllNotifications(this.AppForm);
+			_statusOverlays.Clear();
+			_statusOverlaysLayoutKey = layoutKey;
+			for(var i = 0; i < wanted; i++) {
+				var form = wanted > 1 ? new OverlayForm(i) : new OverlayForm();
+				form.LabelText = text;
+				form.Show();
+				_statusOverlays.Add(form);
 			}
 		}
 
@@ -330,22 +520,57 @@ namespace WindowsVirtualDesktopHelper {
 
 		#region Window Methods
 
+		// Foreground window changes are received as events (SetWinEventHook) instead of polling the
+		// foreground window every 20ms. The history records when each window became the foreground, which
+		// is needed to know if Task View was open right before a tray icon click took the focus away.
+		private Util.OS.WinEventDelegate _fgHookProc = null; // must be kept alive while hooked
+		private IntPtr _fgHook = IntPtr.Zero;
+
 		public void MonitorFGWindowName() {
-			var thread = new Thread(new ThreadStart(_MonitorFGWindowName));
-			thread.Start();
+			// Must run on the UI thread (the hook's events are delivered via its message loop)
+			_fgHookProc = _onForegroundWindowChanged;
+			_fgHook = Util.OS.SetWinEventHook(Util.OS.EVENT_SYSTEM_FOREGROUND, Util.OS.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _fgHookProc, 0, 0, Util.OS.WINEVENT_OUTOFCONTEXT | Util.OS.WINEVENT_SKIPOWNPROCESS);
+			if(_fgHook != IntPtr.Zero) {
+				Util.Logging.WriteLine("App: using foreground window events");
+				_recordForegroundWindow(Util.OS.GetForegroundWindow());
+			} else {
+				// Fallback: poll as before
+				Util.Logging.WriteLine("App: could not hook foreground window events, polling instead");
+				var thread = new Thread(new ThreadStart(_MonitorFGWindowName));
+				thread.IsBackground = true;
+				thread.Start();
+			}
+		}
+
+		private void _onForegroundWindowChanged(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime) {
+			try {
+				_recordForegroundWindow(hwnd);
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: foreground window event: " + e.Message);
+			}
+		}
+
+		private void _recordForegroundWindow(IntPtr hwnd) {
+			var name = Util.OS.GetHandleWndName(hwnd);
+			if(_isUserWindow(hwnd)) _lastUserWindow = hwnd;
+			lock(_fgHistoryLock) {
+				FGWindowHistory.Add(new KeyValuePair<int, string>(Environment.TickCount, name));
+				if(FGWindowHistory.Count > 20) FGWindowHistory.RemoveRange(0, FGWindowHistory.Count - 20);
+			}
+			if(LastForegroundhWnd == IntPtr.Zero) {
+				LastForegroundhWnd = Util.OS.GetFolderViewHandle();
+			}
 		}
 
 		private void _MonitorFGWindowName() {
+			string last = null;
 			while(true) {
 				try {
-					var fgWindowName = Util.OS.GetForegroundWindowName();
-					FGWindowHistory.Add(fgWindowName);
-					var maxHistory = 20;
-					if(FGWindowHistory.Count > maxHistory) {
-						FGWindowHistory.RemoveRange(0, FGWindowHistory.Count - maxHistory);
-					}
-					if(LastForegroundhWnd == IntPtr.Zero) {
-						LastForegroundhWnd = Util.OS.GetFolderViewHandle();
+					var hwnd = Util.OS.GetForegroundWindow();
+					var name = Util.OS.GetHandleWndName(hwnd);
+					if(name != last) {
+						last = name;
+						_recordForegroundWindow(hwnd);
 					}
 					System.Threading.Thread.Sleep(20);
 				} catch(Exception e) {
@@ -355,17 +580,37 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// True if Task View is the foreground window, or was within the last half second (a click on a
+		// tray icon moves the focus to the taskbar, so at click time Task View is no longer in front)
+		public bool IsTaskViewOpen() {
+			if(Util.OS.GetForegroundWindowName() == "Task View") return true;
+			var now = Environment.TickCount;
+			lock(_fgHistoryLock) {
+				for(var i = 0; i < FGWindowHistory.Count; i++) {
+					if(FGWindowHistory[i].Value != "Task View") continue;
+					var until = i + 1 < FGWindowHistory.Count ? FGWindowHistory[i + 1].Key : now;
+					if(unchecked(now - until) <= 500) return true;
+				}
+			}
+			return false;
+		}
 
 		public void MonitorFocusedWindow() {
 			var thread = new Thread(new ThreadStart(_monitorFocusedWindow));
+			thread.IsBackground = true;
 			thread.Start();
 		}
 
 		private void _monitorFocusedWindow() {
 			while(true) {
 				try {
-					_storeLastWinFocused();
-					System.Threading.Thread.Sleep(200);
+					// Only needed for the (optional) restore focus feature, otherwise stay idle
+					if(Settings.GetBool("feature.restorePreviousWindowFocus")) {
+						_storeLastWinFocused();
+						System.Threading.Thread.Sleep(200);
+					} else {
+						System.Threading.Thread.Sleep(2000);
+					}
 				} catch(Exception e) {
 					Util.Logging.WriteLine("App: Error: _monitorFocusedWindow: " + e.Message);
 					System.Threading.Thread.Sleep(1000);
@@ -379,25 +624,306 @@ namespace WindowsVirtualDesktopHelper {
 				var fgWindowName = Util.OS.GetForegroundWindowName();
 				var fgWindowType = Util.OS.GetHandleWndType(hWnd);
 				if(fgWindowType == "Shell_TrayWnd") return; // we ignore the icon tray, since this takes the focus away when we click the prev/next arrows
-				var displayNumber = (int)this.GetVDDisplayNumber(false);
-				if(VDDToLastFocusedWin.ContainsKey(displayNumber)) {
+				// If the desktop number can't be determined we skip, instead of filing this window under desktop 0
+				int displayNumber;
+				if(!_tryGetVDDisplayNumber(out displayNumber)) return;
+				lock(_focusLock) {
 					VDDToLastFocusedWin[displayNumber] = hWnd;
-				} else {
-					VDDToLastFocusedWin.Add(displayNumber, hWnd);
 				}
 				//Console.WriteLine($"store: display {displayNumber} hwnd {hWnd} ({fgWindowType})");
 			}
 		}
 
 		private void _restorePrevWinFocus() {
-			var displayNumber = (int)this.GetVDDisplayNumber(false);
-			if(VDDToLastFocusedWin.ContainsKey(displayNumber)) {
-				IntPtr lastWindowHandle = VDDToLastFocusedWin[displayNumber];
-				if(Util.OS.IsWindow(lastWindowHandle)) {
-					Util.OS.SetForegroundWindow(lastWindowHandle);
-					//Console.WriteLine("restore: "+ displayNumber + " "+ lastWindowHandle);
+			int displayNumber;
+			if(!_tryGetVDDisplayNumber(out displayNumber)) return;
+			IntPtr lastWindowHandle;
+			lock(_focusLock) {
+				if(!VDDToLastFocusedWin.TryGetValue(displayNumber, out lastWindowHandle)) return;
+			}
+			if(Util.OS.IsWindow(lastWindowHandle)) {
+				Util.OS.SetForegroundWindow(lastWindowHandle);
+			}
+		}
+
+		private bool _tryGetVDDisplayNumber(out int displayNumber) {
+			try {
+				displayNumber = (int)this.GetVDDisplayNumber(true);
+				return true;
+			} catch(Exception) {
+				displayNumber = -1;
+				return false;
+			}
+		}
+
+		#endregion
+
+		#region Desktop and Window Management (Windows 11 24H2+)
+
+		// The optional extended API, null if the loaded implementation doesn't support it
+		public VirtualDesktopAPI.IVirtualDesktopManagerExtended VDAPIExtended {
+			get { return this.VDAPI as VirtualDesktopAPI.IVirtualDesktopManagerExtended; }
+		}
+
+		// The last foreground window which is a real app window (not the taskbar, desktop, Task View, ...),
+		// used for the tray menu actions: when the tray menu opens, the taskbar has the focus
+		private IntPtr _lastUserWindow = IntPtr.Zero;
+
+		private static readonly HashSet<string> _shellWindowClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+			"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "NotifyIconOverflowWindow",
+			"TopLevelWindowForOverflowXamlIsland", "XamlExplorerHostIslandWindow", "Windows.UI.Core.CoreWindow",
+			"ForegroundStaging", "MultitaskingViewFrame", "TaskListThumbnailWnd"
+		};
+
+		private bool _isUserWindow(IntPtr hwnd) {
+			if(hwnd == IntPtr.Zero || !Util.OS.IsWindow(hwnd)) return false;
+			if(_shellWindowClasses.Contains(Util.OS.GetHandleWndType(hwnd))) return false;
+			if(string.IsNullOrWhiteSpace(Util.OS.GetHandleWndName(hwnd))) return false;
+			uint pid;
+			Util.OS.GetWindowThreadProcessId(hwnd, out pid);
+			if(pid == (uint)Process.GetCurrentProcess().Id) return false; // our own overlays/forms
+			return true;
+		}
+
+		// The window the user is working in: the foreground window (for hotkeys), or the last app window
+		// that had the focus (for the tray menu, where the taskbar has the focus)
+		public IntPtr GetActiveUserWindow(bool preferForeground) {
+			if(preferForeground) {
+				var fg = Util.OS.GetForegroundWindow();
+				if(_isUserWindow(fg)) return fg;
+			}
+			return _isUserWindow(_lastUserWindow) ? _lastUserWindow : IntPtr.Zero;
+		}
+
+		public void MoveActiveWindowBy(int direction) {
+			var hwnd = GetActiveUserWindow(true);
+			if(hwnd == IntPtr.Zero) return;
+			var count = this.GetVDDisplayCount();
+			var target = (int)this.GetVDDisplayNumber(true) + direction;
+			if(target < 0 || target >= count) {
+				if(!Settings.GetBool("feature.wrapAround") || count < 2) return;
+				target = (target + count) % count;
+			}
+			MoveWindowToDesktop(hwnd, target);
+		}
+
+		public void MoveWindowToDesktop(IntPtr hwnd, int index) {
+			var ext = VDAPIExtended;
+			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return; }
+			if(hwnd == IntPtr.Zero) return;
+			if(index < 0 || index >= this.GetVDDisplayCount()) return;
+			try {
+				ext.MoveWindowToDesktop(hwnd, index);
+				Util.Logging.WriteLine($"App: moved window \"{Util.OS.GetHandleWndName(hwnd)}\" to desktop {index + 1}");
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not move window: " + e.Message);
+				return;
+			}
+			if(Settings.GetBool("feature.moveWindow.follow")) {
+				SwitchToDesktop(index);
+				// Give the moved window the focus again on the new desktop (Windows activates another window
+				// when switching); retried once as the switch animation can still be running
+				Util.OS.SetForegroundWindow(hwnd);
+				var timer = new System.Windows.Forms.Timer { Interval = 250 };
+				timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); if(Util.OS.IsWindow(hwnd)) Util.OS.SetForegroundWindow(hwnd); };
+				timer.Start();
+			}
+		}
+
+		public void TogglePinWindow(IntPtr hwnd) {
+			var ext = VDAPIExtended;
+			if(ext == null || hwnd == IntPtr.Zero) return;
+			try {
+				var pinned = !ext.IsWindowPinned(hwnd);
+				ext.SetWindowPinned(hwnd, pinned);
+				var title = Util.OS.GetHandleWndName(hwnd);
+				Util.Logging.WriteLine($"App: {(pinned ? "pinned" : "unpinned")} window \"{title}\"");
+				ShowFeedback(pinned ? "Pinned to all desktops" : "Unpinned");
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not pin/unpin window: " + e.Message);
+			}
+		}
+
+		public void CreateDesktopAndSwitch() {
+			var ext = VDAPIExtended;
+			if(ext == null) return;
+			try {
+				var index = ext.CreateDesktop();
+				if(index >= 0) SwitchToDesktop(index);
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not create desktop: " + e.Message);
+			}
+		}
+
+		public void RenameCurrentDesktop() {
+			var ext = VDAPIExtended;
+			if(ext == null) return;
+			var index = (int)this.CurrentVDDisplayNumber;
+			var current = this.CurrentVDDisplayName ?? "";
+			if(current == $"Desktop {index + 1}") current = "";
+			var name = Util.Prompt.Show("Rename desktop", $"Name for desktop {index + 1} (leave empty for the default name):", current);
+			if(name == null) return; // cancelled
+			try {
+				ext.RenameDesktop(index, name.Trim());
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not rename desktop: " + e.Message);
+			}
+		}
+
+		public void RemoveCurrentDesktop() {
+			var ext = VDAPIExtended;
+			if(ext == null) return;
+			try {
+				ext.RemoveDesktop((int)this.GetVDDisplayNumber(true));
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not remove desktop: " + e.Message);
+			}
+		}
+
+		// A short message in the switch overlay style, e.g. after pinning a window
+		public void ShowFeedback(string text) {
+			SwitchNotificationForm.CloseAllNotifications(this.AppForm);
+			_switchOverlays.Clear();
+			var form = new SwitchNotificationForm();
+			form.LabelText = text;
+			form.DisplayTimeMS = 1200;
+			form.Show();
+		}
+
+		// Builds the desktop section of the tray menu: all desktops (click to switch), desktop management,
+		// actions for the last used window and quick options
+		public List<ToolStripItem> BuildTrayMenuItems() {
+			var items = new List<ToolStripItem>();
+			var ext = VDAPIExtended;
+			var current = (int)this.CurrentVDDisplayNumber;
+
+			// Desktops
+			List<string> names = null;
+			try { if(ext != null) names = ext.GetDesktopNames(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: desktop names: " + e.Message); }
+			if(names == null) {
+				names = new List<string>();
+				for(var i = 0; i < this.CurrentVDDisplayCount; i++) names.Add(i == current ? this.CurrentVDDisplayName : $"Desktop {i + 1}");
+			}
+			for(var i = 0; i < names.Count; i++) {
+				var index = i;
+				var item = new ToolStripMenuItem($"{i + 1}    {names[i]}") { Checked = i == current };
+				if(i == current) item.Font = new Font(item.Font, FontStyle.Bold);
+				item.Click += (s, e) => SwitchToDesktop(index);
+				items.Add(item);
+			}
+
+			if(ext != null) {
+				items.Add(new ToolStripSeparator());
+				var newItem = new ToolStripMenuItem("New desktop");
+				newItem.Click += (s, e) => CreateDesktopAndSwitch();
+				items.Add(newItem);
+				var renameItem = new ToolStripMenuItem("Rename this desktop...");
+				renameItem.Click += (s, e) => RenameCurrentDesktop();
+				items.Add(renameItem);
+				var removeItem = new ToolStripMenuItem("Close this desktop") { Enabled = names.Count > 1 };
+				removeItem.Click += (s, e) => RemoveCurrentDesktop();
+				items.Add(removeItem);
+
+				// Window actions for the window the user was last working in
+				var hwnd = GetActiveUserWindow(false);
+				if(hwnd != IntPtr.Zero) {
+					var title = Util.OS.GetHandleWndName(hwnd);
+					if(title.Length > 40) title = title.Substring(0, 37) + "...";
+					title = title.Replace("&", "&&");
+					items.Add(new ToolStripSeparator());
+					var windowDesktop = ext.GetWindowDesktop(hwnd);
+					var moveItem = new ToolStripMenuItem($"Move \"{title}\" to");
+					for(var i = 0; i < names.Count; i++) {
+						var index = i;
+						var sub = new ToolStripMenuItem($"{i + 1}    {names[i]}") { Enabled = i != windowDesktop };
+						sub.Click += (s, e) => MoveWindowToDesktop(hwnd, index);
+						moveItem.DropDownItems.Add(sub);
+					}
+					items.Add(moveItem);
+					bool pinned = false;
+					try { pinned = ext.IsWindowPinned(hwnd); } catch(Exception) { }
+					var pinItem = new ToolStripMenuItem($"Show \"{title}\" on all desktops") { Checked = pinned };
+					pinItem.Click += (s, e) => TogglePinWindow(hwnd);
+					items.Add(pinItem);
 				}
 			}
+
+			// Quick options
+			items.Add(new ToolStripSeparator());
+			var options = new ToolStripMenuItem("Options");
+			options.DropDownItems.Add(_optionMenuItem("Wrap around at first/last desktop", "feature.wrapAround"));
+			options.DropDownItems.Add(_optionMenuItem("Color the desktop number per desktop", "feature.colorIconsPerDesktop"));
+			if(ext != null) options.DropDownItems.Add(_optionMenuItem("Switch along when moving a window", "feature.moveWindow.follow"));
+			options.DropDownItems.Add(new ToolStripSeparator());
+			var openConfig = new ToolStripMenuItem("Open config folder");
+			openConfig.Click += (s, e) => OpenURL(Settings.GetConfigDirectory());
+			options.DropDownItems.Add(openConfig);
+			var openLog = new ToolStripMenuItem("Open log file");
+			openLog.Click += (s, e) => { var log = System.IO.Path.Combine(Settings.GetConfigDirectory(), "WindowsVirtualDesktopHelper.log"); if(System.IO.File.Exists(log)) OpenURL(log); };
+			options.DropDownItems.Add(openLog);
+			items.Add(options);
+			items.Add(new ToolStripSeparator());
+			return items;
+		}
+
+		private ToolStripMenuItem _optionMenuItem(string text, string setting) {
+			var item = new ToolStripMenuItem(text) { Checked = Settings.GetBool(setting) };
+			item.Click += (s, e) => {
+				Settings.SetBool(setting, !Settings.GetBool(setting));
+				try { Settings.SaveConfig(); } catch(Exception ex) { Util.Logging.WriteLine("App: Error: saving config: " + ex.Message); }
+				ApplySettings();
+			};
+			return item;
+		}
+
+		#endregion
+
+		#region Config File Watching
+
+		private System.IO.FileSystemWatcher _configWatcher = null;
+		private System.Windows.Forms.Timer _configReloadTimer = null;
+
+		// Applies config file edits immediately (debounced, and ignoring our own saves). Must run on the UI thread.
+		public void StartConfigWatcher() {
+			if(!Settings.GetBool("feature.autoReloadConfig")) return;
+			try {
+				_configReloadTimer = new System.Windows.Forms.Timer { Interval = 600 };
+				_configReloadTimer.Tick += (s, e) => { _configReloadTimer.Stop(); _reloadConfig(); };
+				_configWatcher = new System.IO.FileSystemWatcher(Settings.GetConfigDirectory(), "*.config");
+				_configWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.Size;
+				_configWatcher.SynchronizingObject = this.AppForm; // raise the events on the UI thread
+				System.IO.FileSystemEventHandler changed = (s, e) => { _configReloadTimer.Stop(); _configReloadTimer.Start(); };
+				_configWatcher.Changed += changed;
+				_configWatcher.Created += changed;
+				_configWatcher.Deleted += changed;
+				_configWatcher.Renamed += (s, e) => { _configReloadTimer.Stop(); _configReloadTimer.Start(); };
+				_configWatcher.EnableRaisingEvents = true;
+				Util.Logging.WriteLine("App: watching the config folder for changes");
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not watch the config folder: " + e.Message);
+			}
+		}
+
+		private void _reloadConfig() {
+			// Our own save also changes the file, that must not trigger a reload
+			if((DateTime.UtcNow - Settings.LastSavedUtc).TotalSeconds < 3) return;
+			try {
+				Settings.ReloadConfig();
+				Util.Logging.WriteLine("App: config file changed, reloaded");
+				ApplySettings();
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not reload the config: " + e.Message);
+			}
+		}
+
+		// Applies the current settings to everything which is set up once (hotkeys, icons, overlays, ...)
+		public void ApplySettings() {
+			try { CheckThemeChanged(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: theme: " + e.Message); }
+			try { SetupHotKeys(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: hotkeys: " + e.Message); }
+			try { UIUpdate(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: icons: " + e.Message); }
+			try { UpdateStatusOverlayWindows(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: status overlay: " + e.Message); }
+			try { if(Settings.GetBool("feature.useShellNotifications") != _vdNotificationsActive) StartVDNotifications(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: notifications: " + e.Message); }
+			try { if(this.SettingsForm != null && !this.SettingsForm.IsDisposed) this.SettingsForm.ReloadFromSettings(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: settings window: " + e.Message); }
 		}
 
 		#endregion
@@ -412,6 +938,9 @@ namespace WindowsVirtualDesktopHelper {
 			// - DesktopBackward
 			// - PreviousDesktop
 			// - Desktop1...Desktop99
+			// - MoveWindowForward, MoveWindowBackward, MoveWindowToDesktop1...MoveWindowToDesktop99 (Windows 11 24H2+)
+			// - TogglePinWindow (Windows 11 24H2+)
+			// - NewDesktop (Windows 11 24H2+)
 			try {
 
 				action = action.Trim().ToLower();
@@ -423,6 +952,23 @@ namespace WindowsVirtualDesktopHelper {
 					return null;
 				} else if(action == "previousdesktop") {
 					this.SwitchToPreviousDesktop();
+					return null;
+				} else if(action == "movewindowforward") {
+					this.MoveActiveWindowBy(+1);
+					return null;
+				} else if(action == "movewindowbackward") {
+					this.MoveActiveWindowBy(-1);
+					return null;
+				} else if(action.StartsWith("movewindowtodesktop")) {
+					int target;
+					if(!int.TryParse(action.Replace("movewindowtodesktop", ""), out target)) throw new Exception("invalid desktop number");
+					this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1);
+					return null;
+				} else if(action == "togglepinwindow") {
+					this.TogglePinWindow(this.GetActiveUserWindow(true));
+					return null;
+				} else if(action == "newdesktop") {
+					this.CreateDesktopAndSwitch();
 					return null;
 				} else if(action.StartsWith("desktop")) {
 					var desktopNumber = 0;
@@ -498,6 +1044,23 @@ namespace WindowsVirtualDesktopHelper {
 				var hotKey = Settings.GetString("feature.useHotKeyToSwitchDesktopBackward.hotkey");
 				if(hotKey != null && hotKey != "") {
 					hotkeys.Add($"{hotKey} = DesktopBackward");
+				}
+			}
+
+			// Window/desktop management hotkeys, only when the Windows version supports it (otherwise
+			// we would take the key combinations away from other apps for nothing)
+			if(this.VDAPIExtended != null) {
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToMoveWindowForward", "MoveWindowForward");
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToMoveWindowBackward", "MoveWindowBackward");
+				_addFeatureHotKey(hotkeys, "feature.useHotKeyToTogglePinWindow", "TogglePinWindow");
+				if(Settings.GetBool("feature.useHotKeyToMoveWindowToDesktopNumber")) {
+					var hotKey = Settings.GetString("feature.useHotKeyToMoveWindowToDesktopNumber.hotkey");
+					if(!string.IsNullOrWhiteSpace(hotKey)) {
+						for(var i = 1; i <= 9; i++) {
+							hotkeys.Add($"{hotKey} + D{i} = MoveWindowToDesktop{i}");
+							hotkeys.Add($"{hotKey} + NumPad{i} = MoveWindowToDesktop{i}");
+						}
+					}
 				}
 			}
 
@@ -581,8 +1144,15 @@ namespace WindowsVirtualDesktopHelper {
 						Util.Logging.WriteLine($"SetupHotKeys: Invalid hotkey {hotkeyAction.HotKeyAndAction}, a hotkey must have at least one key");
 						isValid = false;
 					}
-					// Register
-					if(isValid) _keyboardHooksHotKeysAndActions.Add(hotkeyAction);
+					// Register (a combination listed twice would otherwise run its action once per duplicate)
+					if(isValid) {
+						var duplicate = _keyboardHooksHotKeysAndActions.FirstOrDefault(h => h.Keys == hotkeyAction.Keys && h.Modifiers == hotkeyAction.Modifiers);
+						if(duplicate != null) {
+							Util.Logging.WriteLine($"SetupHotKeys: ignoring hotkey {hotkeyAction.HotKeyAndAction}, the same key combination is already used by {duplicate.HotKeyAndAction}");
+						} else {
+							_keyboardHooksHotKeysAndActions.Add(hotkeyAction);
+						}
+					}
 				}
 			}
 
@@ -594,15 +1164,51 @@ namespace WindowsVirtualDesktopHelper {
 			// Note: registration can fail, for example when another application already owns the
 			// hotkey or when a combination is listed twice - this must not crash the app, so we
 			// log the failure and keep the remaining hotkeys working
+			var conflicts = new List<string>();
 			foreach(var hotkeyAction in _keyboardHooksHotKeysAndActions) {
 				try {
 					this._keyboardHooks.RegisterHotKey(hotkeyAction.Modifiers, hotkeyAction.Keys);
 				} catch(Exception e) {
 					Util.Logging.WriteLine($"SetupHotKeys: could not register hotkey {hotkeyAction.HotKeyAndAction}: {e.Message}");
+					conflicts.Add(hotkeyAction.HotKeyAndAction);
 				}
 			}
+			_hotKeyConflicts = conflicts;
+			// At startup the tray icons don't exist yet, then StartUp shows the notification
+			if(this.AppForm != null && this.AppForm.IsHandleCreated) _postToUI(NotifyHotKeyConflicts);
+		}
 
+		private void _addFeatureHotKey(List<string> hotkeys, string feature, string action) {
+			if(!Settings.GetBool(feature)) return;
+			var hotKey = Settings.GetString(feature + ".hotkey");
+			if(!string.IsNullOrWhiteSpace(hotKey)) hotkeys.Add($"{hotKey} = {action}");
+		}
 
+		private List<string> _hotKeyConflicts = new List<string>();
+		private string _hotKeyConflictsNotified = "";
+
+		// Tells the user which hotkeys could not be registered (usually because another app already uses them),
+		// instead of the hotkeys silently not working. Each distinct set of conflicts is only shown once.
+		public void NotifyHotKeyConflicts() {
+			try {
+				var key = string.Join("\n", _hotKeyConflicts);
+				if(_hotKeyConflicts.Count == 0 || key == _hotKeyConflictsNotified) return;
+				if(!Settings.GetBool("feature.notifyHotKeyConflicts")) return;
+				_hotKeyConflictsNotified = key;
+				var shown = _hotKeyConflicts.Take(6).ToList();
+				var text = string.Join("\n", shown) + (_hotKeyConflicts.Count > shown.Count ? $"\n(+{_hotKeyConflicts.Count - shown.Count} more)" : "");
+				text += "\nThey are probably used by another app. Change them in the config file.";
+				ShowTrayNotification("Some hotkeys could not be registered", text, ToolTipIcon.Warning);
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: notifying hotkey conflicts: " + e.Message);
+			}
+		}
+
+		public void ShowTrayNotification(string title, string text, ToolTipIcon icon) {
+			var notifyIcon = new[] { this.AppForm.notifyIconNumber, this.AppForm.notifyIconName, this.AppForm.notifyIconNext, this.AppForm.notifyIconPrev }.FirstOrDefault(i => i.Visible);
+			if(notifyIcon == null) return;
+			if(text.Length > 255) text = text.Substring(0, 252) + "...";
+			notifyIcon.ShowBalloonTip(10000, title, text, icon);
 		}
 
 		private void _hotKeyPressed(object sender, KeyPressedEventArgs e) {
@@ -622,18 +1228,17 @@ namespace WindowsVirtualDesktopHelper {
 
 		public void MonitorSystemThemeSwitch() {
 			var thread = new Thread(new ThreadStart(_MonitorSystemThemeSwitch));
+			thread.IsBackground = true;
 			thread.Start();
 		}
 
 		private void _MonitorSystemThemeSwitch() {
 			while (true) {
 				try {
-					var newSystemThemeName = this.GetSystemThemeName();
-					if (newSystemThemeName != this.CurrentSystemThemeName) {
-						this.CurrentSystemThemeName = newSystemThemeName;
-						ThemeSwitched();
-					}
-					System.Threading.Thread.Sleep(1000);
+					// Theme changes are normally picked up instantly via WM_SETTINGCHANGE (see AppForm.WndProc),
+					// this poll is only a safety net
+					CheckThemeChanged();
+					System.Threading.Thread.Sleep(10000);
 				} catch (Exception e) {
 					Util.Logging.WriteLine("App: Error: " + e.Message);
 					System.Threading.Thread.Sleep(5000);
@@ -641,8 +1246,20 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		public void CheckThemeChanged() {
+			var newSystemThemeName = this.GetSystemThemeName();
+			if (newSystemThemeName != this.CurrentSystemThemeName) {
+				this.CurrentSystemThemeName = newSystemThemeName;
+				ThemeSwitched();
+			}
+		}
+
 		public void ThemeSwitched() {
-			this.UIUpdateIcons();
+			// May be called from the theme monitor thread
+			_postToUI(() => {
+				this.UIUpdateIcons();
+				this.UpdateStatusOverlayWindows(); // re-created with the new theme colors
+			});
 		}
 
 		public string GetSystemThemeName() {
@@ -666,20 +1283,23 @@ namespace WindowsVirtualDesktopHelper {
 		public void EnableStartupWithWindows() {
 			// https://stackoverflow.com/questions/674628/how-do-i-set-a-program-to-launch-at-startup
 			try {
-				Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
-				key.SetValue(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyTitleAttribute>().Title, Application.ExecutablePath);
+				using(var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run")) {
+					// Quoted, so that a path containing spaces can never be misparsed as a command line
+					key.SetValue(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyTitleAttribute>().Title, "\"" + Application.ExecutablePath + "\"");
+				}
 			} catch (Exception e) {
-				throw new Exception("EnableStartupWithWindows: could not set registry value: " + e.Message);
+				throw new Exception("EnableStartupWithWindows: could not set registry value: " + e.Message, e);
 			}
 		}
 
 		public void DisableStartupWithWindows() {
 			// https://stackoverflow.com/questions/674628/how-do-i-set-a-program-to-launch-at-startup
 			try {
-				Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
-				key.DeleteValue(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyTitleAttribute>().Title, false);
+				using(var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true)) {
+					if(key != null) key.DeleteValue(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyTitleAttribute>().Title, false);
+				}
 			} catch (Exception e) {
-				throw new Exception("EnableStartupWithWindows: could not delete registry value: " + e.Message);
+				throw new Exception("DisableStartupWithWindows: could not delete registry value: " + e.Message, e);
 			}
 		}
 
@@ -704,16 +1324,46 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 
+		// The DPI the tray icons are rendered for: the taskbar's actual DPI (updates live when the scaling
+		// changes), falling back to the DPI of our hidden host window
+		public int TrayDpi {
+			get {
+				var dpi = Util.OS.GetTaskbarDpi();
+				return dpi > 0 ? dpi : this.AppForm.DeviceDpi;
+			}
+		}
+
 		public void UIUpdateIconForVDDisplayNumber(string theme, uint number, string name) {
+			var color = _getDesktopColor(theme, (int)number);
 			number++;
-			this.AppForm.notifyIconNumber.Icon = Util.Icons.GenerateNotificationIcon(number.ToString(), theme, this.AppForm.DeviceDpi, false);
+			this.AppForm.notifyIconNumber.Icon = Util.Icons.GenerateNotificationIcon(number.ToString(), theme, this.TrayDpi, false, 1.0, color);
+			UIUpdateTooltips();
+		}
+
+		// "Work - desktop 2 of 4" (the name is omitted if it is just the default "Desktop n")
+		public void UIUpdateTooltips() {
+			var number = (int)this.CurrentVDDisplayNumber + 1;
+			var name = this.CurrentVDDisplayName ?? "";
+			var text = $"Desktop {number} of {this.CurrentVDDisplayCount}";
+			if(name != "" && name != $"Desktop {number}") text = $"{name} - desktop {number} of {this.CurrentVDDisplayCount}";
+			if(text.Length > 63) text = text.Substring(0, 60) + "..."; // NotifyIcon.Text is limited to 63 characters
+			this.AppForm.notifyIconNumber.Text = text;
+			this.AppForm.notifyIconName.Text = text;
+		}
+
+		// The per desktop icon color (feature.colorIconsPerDesktop), or null for the theme color
+		private string _getDesktopColor(string theme, int index) {
+			if(!Settings.GetBool("feature.colorIconsPerDesktop")) return null;
+			var colors = (Settings.GetString("theme.icons.desktopColors." + theme) ?? "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(c => c.Trim()).Where(c => c != "").ToList();
+			if(colors.Count == 0 || index < 0) return null;
+			return colors[index % colors.Count];
 		}
 
 		public void UIUpdateIconForVDDisplayName(string theme, string name) {
 			var nameToShow = name;
 			if(nameToShow == null) nameToShow = "";
 			if(nameToShow.Length > 1) nameToShow = new StringInfo(nameToShow).SubstringByTextElements(0, 1);
-			this.AppForm.notifyIconName.Icon = Util.Icons.GenerateNotificationIcon(nameToShow, theme, this.AppForm.DeviceDpi, false);
+			this.AppForm.notifyIconName.Icon = Util.Icons.GenerateNotificationIcon(nameToShow, theme, this.TrayDpi, false, 1.0, _getDesktopColor(theme, (int)this.CurrentVDDisplayNumber));
 		}
 
 		public void UIUpdateNextPrevIconVisibility(string theme) {
@@ -723,9 +1373,13 @@ namespace WindowsVirtualDesktopHelper {
 				var nextChar = Settings.GetString("feature.showPrevNextIcons.nextChar");
 				var hasNextDesktop = count != 0 && App.Instance.CurrentVDDisplayNumber != count;
 				var hasPrevDesktop = App.Instance.CurrentVDDisplayNumber != 0;
+				if(count != 0 && Settings.GetBool("feature.wrapAround")) {
+					hasNextDesktop = true; // with wrap around there is always a next/previous desktop
+					hasPrevDesktop = true;
+				}
 				// Update prev/next icons
-				this.AppForm.notifyIconPrev.Icon = Util.Icons.GenerateNotificationIcon(prevChar, theme, this.AppForm.DeviceDpi, true, hasPrevDesktop ? 1.0f : Settings.GetDouble("theme.icons.disabledOpacity"));
-				this.AppForm.notifyIconNext.Icon = Util.Icons.GenerateNotificationIcon(nextChar, theme, this.AppForm.DeviceDpi, true, hasNextDesktop ? 1.0f : Settings.GetDouble("theme.icons.disabledOpacity"));
+				this.AppForm.notifyIconPrev.Icon = Util.Icons.GenerateNotificationIcon(prevChar, theme, this.TrayDpi, true, hasPrevDesktop ? 1.0f : Settings.GetDouble("theme.icons.disabledOpacity"));
+				this.AppForm.notifyIconNext.Icon = Util.Icons.GenerateNotificationIcon(nextChar, theme, this.TrayDpi, true, hasNextDesktop ? 1.0f : Settings.GetDouble("theme.icons.disabledOpacity"));
 				// Show or hide?
 				if(Settings.GetBool("feature.showPrevNextIcons.automaticallyHidePrevNextOnBounds")) {
 					this.AppForm.notifyIconNext.Visible = hasNextDesktop;
@@ -773,11 +1427,17 @@ namespace WindowsVirtualDesktopHelper {
 		#region Misc
 
 		public void OpenURL(string url) {
-			url = url.Replace("&", "^&"); //TODO: is this really needed?
 			Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
 		}
 
 		public void Exit() {
+			// Settings are otherwise only saved when the settings window is closed, so persist
+			// any pending changes before quitting
+			try {
+				if(Settings.HasUnsavedChanges) Settings.SaveConfig();
+			} catch(Exception e) {
+				Util.Logging.WriteLine("App: Error: could not save the config on exit: " + e.Message);
+			}
 			Application.Exit();
 			System.Environment.Exit(0);
 		}

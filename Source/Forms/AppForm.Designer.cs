@@ -90,13 +90,15 @@ namespace WindowsVirtualDesktopHelper {
             // 
             this.notifyIconPrev.Icon = ((System.Drawing.Icon)(resources.GetObject("notifyIconPrev.Icon")));
             this.notifyIconPrev.Text = "Previous Desktop";
-            this.notifyIconPrev.Click += new System.EventHandler(this.notifyIconPrev_Click);
+            this.notifyIconPrev.MouseClick += new System.Windows.Forms.MouseEventHandler(this.notifyIconPrev_MouseClick);
+            this.notifyIconPrev.MouseDoubleClick += new System.Windows.Forms.MouseEventHandler(this.notifyIconPrev_MouseClick);
             // 
             // notifyIconNext
             // 
             this.notifyIconNext.Icon = ((System.Drawing.Icon)(resources.GetObject("notifyIconNext.Icon")));
             this.notifyIconNext.Text = "Next Desktop";
-            this.notifyIconNext.Click += new System.EventHandler(this.notifyIconNext_Click);
+            this.notifyIconNext.MouseClick += new System.Windows.Forms.MouseEventHandler(this.notifyIconNext_MouseClick);
+            this.notifyIconNext.MouseDoubleClick += new System.Windows.Forms.MouseEventHandler(this.notifyIconNext_MouseClick);
             // 
             // notifyIconName
             // 

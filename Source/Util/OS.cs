@@ -41,6 +41,42 @@ namespace WindowsVirtualDesktopHelper.Util {
 		[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
 		private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+		public delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+
+		[DllImport("user32.dll")]
+		public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+		[DllImport("user32.dll")]
+		public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+		public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+		public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+		public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+
+		[DllImport("user32.dll")]
+		private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+		[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+		public static extern uint RegisterWindowMessage(string lpString);
+
+		[DllImport("user32.dll")]
+		public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+		#endregion
+
+		#region DPI
+
+		// The DPI of the (primary) taskbar, which is what the tray icons are rendered for. Returns 0 if unknown.
+		public static int GetTaskbarDpi() {
+			try {
+				var taskbar = FindWindowA("Shell_TrayWnd", null);
+				if (taskbar == IntPtr.Zero) return 0;
+				return (int)GetDpiForWindow(taskbar); // Windows 10 1607+
+			} catch (Exception) {
+				return 0;
+			}
+		}
+
 		#endregion
 
 		#region Manipulating Windows
@@ -136,14 +172,16 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 		public static bool IsSystemLightThemeModeEnabled() {
 			// https://learn.microsoft.com/en-us/answers/questions/715081/how-to-detect-windows-dark-mode.html
+			// Note: this is polled every second, so the key is opened read-only and always disposed.
+			// The value is missing on some builds/SKUs, where we assume the (default) light theme
 			try {
-				Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", true);
-				var ret = key.GetValue("SystemUsesLightTheme");
-				var retNumber = (int)ret; // 1 == light
-				if (retNumber == 1) return true;
-				else return false;
+				using(var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", false)) {
+					var ret = key == null ? null : key.GetValue("SystemUsesLightTheme");
+					if(ret == null) return true;
+					return Convert.ToInt32(ret) == 1; // 1 == light
+				}
 			} catch (Exception e) {
-				throw new Exception("IsDarkThemeMode: could not get dark/light theme setting: " + e.Message);
+				throw new Exception("IsSystemLightThemeModeEnabled: could not get dark/light theme setting: " + e.Message, e);
 			}
 		}
 

@@ -13,8 +13,8 @@ Any setting starting with ``hotkeys.`` is considered a hotkey setting.
 For example, one can set a hotkey configuration to jump to a specific desktop by setting the following setting:
 
 ```
-hotkeys.myCustomHotkey1 = "Ctrl + Alt + Shift + D1 = Desktop1"
-hotkeys.myCustomHotkey2 = "Ctrl + Alt + Shift + D2 = Desktop2"
+hotkeys.myCustomHotkey1: "Ctrl + Alt + Shift + D1 = Desktop1"
+hotkeys.myCustomHotkey2: "Ctrl + Alt + Shift + D2 = Desktop2"
 ```
 
 or use a custom shortcut for prev/next desktop:

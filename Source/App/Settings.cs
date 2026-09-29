@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -102,6 +103,33 @@ namespace WindowsVirtualDesktopHelper {
 			RegisterDefault("feature.useHotKeyToSwitchDesktopBackward", false);
 			RegisterDefault("feature.useHotKeyToSwitchDesktopBackward.hotkey", "Alt + Left");
 
+			// Feature: move the active window to another desktop (Windows 11 24H2+)
+			RegisterDefault("feature.useHotKeyToMoveWindowForward", true, "Move the active window to the next desktop", "v2.2");
+			RegisterDefault("feature.useHotKeyToMoveWindowForward.hotkey", "Ctrl + Shift + Win + Right");
+			RegisterDefault("feature.useHotKeyToMoveWindowBackward", true, "Move the active window to the previous desktop", "v2.2");
+			RegisterDefault("feature.useHotKeyToMoveWindowBackward.hotkey", "Ctrl + Shift + Win + Left");
+			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber", false, "Move the active window to desktop 1..9 with the hotkey + number", "v2.2");
+			RegisterDefault("feature.useHotKeyToMoveWindowToDesktopNumber.hotkey", "Ctrl + Shift + Win");
+			RegisterDefault("feature.moveWindow.follow", true, "true - after moving a window to another desktop, switch to that desktop too; false - stay", "v2.2");
+
+			// Feature: pin the active window to all desktops (Windows 11 24H2+)
+			RegisterDefault("feature.useHotKeyToTogglePinWindow", true, "Pin/unpin the active window to all desktops", "v2.2");
+			RegisterDefault("feature.useHotKeyToTogglePinWindow.hotkey", "Ctrl + Shift + Win + P");
+
+			// Feature: wrap around when switching forward/backward past the last/first desktop
+			RegisterDefault("feature.wrapAround", false, "If enabled, switching forward on the last desktop goes to the first (and backward on the first to the last)", "v2.2");
+
+			// Feature: notify about hotkeys which could not be registered (e.g. already used by another app)
+			RegisterDefault("feature.notifyHotKeyConflicts", true, "If enabled, a notification lists the hotkeys which could not be registered", "v2.2");
+
+			// Feature: color the tray desktop number per desktop
+			RegisterDefault("feature.colorIconsPerDesktop", false, "If enabled, the desktop number in the tray is colored per desktop (see theme.icons.desktopColors.*)", "v2.2");
+			RegisterDefault("theme.icons.desktopColors.dark", "#4FC3F7, #81C784, #FFB74D, #F06292, #BA68C8, #FFF176, #4DB6AC, #FF8A65, #90A4AE", "Comma separated colors for desktops 1, 2, 3... (repeating) on a dark taskbar", "v2.2");
+			RegisterDefault("theme.icons.desktopColors.light", "#0277BD, #2E7D32, #E65100, #AD1457, #6A1B9A, #9E7C00, #00695C, #BF360C, #455A64", "Comma separated colors for desktops 1, 2, 3... (repeating) on a light taskbar", "v2.2");
+
+			// Feature: reload the config file(s) automatically when they are edited
+			RegisterDefault("feature.autoReloadConfig", true, "If enabled, changes to the config file are applied immediately without restarting", "v2.2");
+
 			// Feature: showDesktopNumberInIconTray
 			RegisterDefault("feature.showDesktopNumberInIconTray", true);
 			RegisterDefault("feature.showDesktopNumberInIconTray.clickToOpenTaskView", true);
@@ -110,7 +138,8 @@ namespace WindowsVirtualDesktopHelper {
 			RegisterDefault("feature.showDesktopNameInIconTray", false);
 
 			// Feature: restorePreviousWindowFocus
-			RegisterDefault("feature.restorePreviousWindowFocus", false, "If enabled, when switching desktop the previously focused window on that desktop will be refocused", "v2.1");
+			RegisterDefault("feature.useShellNotifications", true, "If enabled (and supported by the Windows version), desktop switches are detected instantly via shell notifications instead of by polling. Disable if you experience issues.", "v2.2");
+			RegisterDefault("feature.restorePreviousWindowFocus", false,"If enabled, when switching desktop the previously focused window on that desktop will be refocused", "v2.1");
 
 		}
 
@@ -146,8 +175,33 @@ namespace WindowsVirtualDesktopHelper {
 			// Get the direcotry of the config file
 			var dir = System.IO.Path.GetDirectoryName(path);
 			// Load
-			_loadConfigPath(dir);
+			_loadConfigPath(dir, _settingsConfig, _settingsConfigFilesUsed);
 		}
+
+		// True when a setting was changed at runtime and not yet written to the config file
+		public static bool HasUnsavedChanges { get; private set; }
+
+		// Re-reads the config file(s), replacing the current config values (e.g. after the user edited the file).
+		// The new values are loaded into a new dictionary which is then swapped in, so readers on other
+		// threads never see a half loaded config
+		public static void ReloadConfig() {
+			var path = _getConfigPath();
+			var dir = System.IO.Path.GetDirectoryName(path);
+			var config = new ConcurrentDictionary<string, object>();
+			var filesUsed = new List<string>();
+			_loadConfigPath(dir, config, filesUsed);
+			_settingsConfig = config;
+			_settingsConfigFilesUsed = filesUsed;
+			HasUnsavedChanges = false;
+		}
+
+		// The directory which contains the config file(s)
+		public static string GetConfigDirectory() {
+			return System.IO.Path.GetDirectoryName(_getConfigPath());
+		}
+
+		// When the config file was last written by SaveConfig (to ignore our own writes when watching the file)
+		public static DateTime LastSavedUtc { get; private set; }
 
 		public static void SaveConfig() {
 			// Get the config file path
@@ -163,22 +217,41 @@ namespace WindowsVirtualDesktopHelper {
 				var val = _serializeValAsType(kvp.Value);
 				lines.Add($"{key}: {val}");
 			}
-            // Sort the lines by key but so that parent keys appear first (ie feature.showSplashScreen appears before feature.showSplashScreen.duration)
-            lines.Sort((a, b) => {
-                var aKey = a.Trim().StartsWith("#") ? a.Trim().Substring(1) : a.Trim();
-                var bKey = b.Trim().StartsWith("#") ? b.Trim().Substring(1) : b.Trim();
+			// Sort the lines by key but so that parent keys appear first (ie feature.showSplashScreen appears before feature.showSplashScreen.duration)
+			// Note: we sort on the key part of each line only (never the value, which can contain dots), and
+			// keys without a dot are their own parent, which keeps the comparison total and transitive
+			lines.Sort((a, b) => {
+				var aKey = _getSortKey(a);
+				var bKey = _getSortKey(b);
+				var aParentKey = _getParentKey(aKey);
+				var bParentKey = _getParentKey(bKey);
+				var byParent = string.Compare(aParentKey, bParentKey, StringComparison.Ordinal);
+				if(byParent != 0) return byParent;
+				return string.Compare(aKey, bKey, StringComparison.Ordinal);
+			});
+			// Write the lines to a temp file first and then swap it in, so that a crash or power loss
+			// mid-write can never leave the user with a truncated/empty config file
+			var tempPath = path + ".tmp";
+			System.IO.File.WriteAllLines(tempPath, lines);
+			if(System.IO.File.Exists(path)) {
+				System.IO.File.Replace(tempPath, path, null);
+			} else {
+				System.IO.File.Move(tempPath, path);
+			}
+			HasUnsavedChanges = false;
+			LastSavedUtc = DateTime.UtcNow;
+		}
 
-                // Check if aKey and bKey have the same parent key
-                var aParentKey = aKey.Substring(0, aKey.LastIndexOf('.'));
-                var bParentKey = bKey.Substring(0, bKey.LastIndexOf('.'));
-                if(aParentKey == bParentKey) {
-                    return string.Compare(aKey, bKey, StringComparison.Ordinal);
-                } else {
-                    return string.Compare(aParentKey, bParentKey, StringComparison.Ordinal);
-                }
-            });
-			// Write the lines to the config file
-			System.IO.File.WriteAllLines(path, lines);
+		private static string _getSortKey(string line) {
+			// The key of a config line "key: value", where commented defaults ("#key: value") sort with their key
+			var key = line.Split(new[] { ':' }, 2)[0].Trim();
+			if(key.StartsWith("#")) key = key.Substring(1).Trim();
+			return key;
+		}
+
+		private static string _getParentKey(string key) {
+			var lastDot = key.LastIndexOf('.');
+			return lastDot < 0 ? key : key.Substring(0, lastDot);
 		}
 
 		public static void RegisterLaunchArgs(string[] args) {
@@ -205,13 +278,19 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public static List<string> GetKeys() {
-			return _createMergedSettingsDictionary(true, true).Keys.ToList();
+			// Note: the merged dictionary contains the defaults under "#key" (as commented lines for
+			// SaveConfig), which are not real settings and must not be exposed to callers
+			return _createMergedSettingsDictionary(true, true).Keys.Where(k => !k.StartsWith("#")).ToList();
 		}
 
 		public static string GetString(string key, string defaultValue = null) {
 			var ret = _get(key, defaultValue);
 			if(ret == null) return null;
-			return ret as string;
+			if(ret is string) return (string)ret;
+			// The parser types unquoted values eagerly (5 becomes an int), so a text setting such as
+			// `feature.showSplashScreen.text: 5` must still read back as the string "5"
+			if(ret is bool) return (bool)ret ? "true" : "false";
+			return Convert.ToString(ret, CultureInfo.InvariantCulture);
 		}
 
 		public static string GetFontName(string key, string defaultValue = null) {
@@ -249,8 +328,16 @@ namespace WindowsVirtualDesktopHelper {
 			string defaultValueStr = null;
 			if(defaultValue != null) defaultValueStr = defaultValue.ToString().ToLower();
 			var ret = _get(key, defaultValueStr);
+			// A hand-edited config should degrade gracefully, so we coerce where the intent is clear
+			// and otherwise fall back to the registered default instead of crashing the app
 			if(ret is bool) return (bool)ret;
-			if(ret is string) return bool.Parse((string)ret);
+			if(ret is int) return (int)ret != 0;
+			if(ret is string && bool.TryParse(((string)ret).Trim(), out bool parsedBool)) return parsedBool;
+			var fallback = _getRegisteredDefault(key);
+			if(fallback is bool) {
+				_logInvalidValue(key, "a bool", ret);
+				return (bool)fallback;
+			}
 			throw new Exception($"Setting {key} is not a bool (value is {ret})");
 		}
 
@@ -263,7 +350,14 @@ namespace WindowsVirtualDesktopHelper {
 			if(defaultValue != null) defaultValueStr = defaultValue.Value.ToString(CultureInfo.InvariantCulture);
 			var ret = _get(key, defaultValueStr);
 			if(ret is int) return (int)ret;
-			if(ret is string) return int.Parse((string)ret, CultureInfo.InvariantCulture);
+			if(ret is float) return (int)Math.Round((float)ret);
+			if(ret is double) return (int)Math.Round((double)ret);
+			if(ret is string && int.TryParse(((string)ret).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedInt)) return parsedInt;
+			var fallback = _getRegisteredDefault(key);
+			if(fallback is int) {
+				_logInvalidValue(key, "an int", ret);
+				return (int)fallback;
+			}
 			throw new Exception($"Setting {key} is not a int (value is {ret})");
 		}
 
@@ -278,11 +372,16 @@ namespace WindowsVirtualDesktopHelper {
 			if(ret is double) return (double)ret;
 			if(ret is float) return (float)ret; // note: must unbox as float first, unboxing directly to double throws
 			if(ret is int) return (int)ret;
-			if(ret is string) return double.Parse((string)ret, NumberStyles.Float, CultureInfo.InvariantCulture);
+			if(ret is string && double.TryParse(((string)ret).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedDouble)) return parsedDouble;
+			var fallback = _getRegisteredDefault(key);
+			if(fallback is double || fallback is float || fallback is int) {
+				_logInvalidValue(key, "a number", ret);
+				return Convert.ToDouble(fallback, CultureInfo.InvariantCulture);
+			}
 			throw new Exception($"Setting {key} is not a double (value is {ret})");
 		}
 
-		public static void SetDouble(string key, int value) {
+		public static void SetDouble(string key, double value) {
 			_set(key, value);
 		}
 
@@ -293,8 +392,22 @@ namespace WindowsVirtualDesktopHelper {
 			if(ret is double) return (float)(double)ret; // note: must unbox as double first, unboxing directly to float throws
 			if(ret is float) return (float)ret;
 			if(ret is int) return (int)ret;
-			if(ret is string) return float.Parse((string)ret, NumberStyles.Float, CultureInfo.InvariantCulture);
+			if(ret is string && float.TryParse(((string)ret).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedFloat)) return parsedFloat;
+			var fallback = _getRegisteredDefault(key);
+			if(fallback is double || fallback is float || fallback is int) {
+				_logInvalidValue(key, "a number", ret);
+				return Convert.ToSingle(fallback, CultureInfo.InvariantCulture);
+			}
 			throw new Exception($"Setting {key} is not a float (value is {ret})");
+		}
+
+		private static object _getRegisteredDefault(string key) {
+			object val;
+			return _settingsDefaults.TryGetValue(key, out val) ? val : null;
+		}
+
+		private static void _logInvalidValue(string key, string expected, object actual) {
+			Util.Logging.WriteLine($"Settings: value of {key} is not {expected} (value is \"{actual}\"), using the default instead");
 		}
 
 		#endregion
@@ -304,8 +417,9 @@ namespace WindowsVirtualDesktopHelper {
 		// The launch arguments 
 		static private Dictionary<string, string> _settingsDocumentations = new Dictionary<string, string>();
 		static private Dictionary<string, string> _settingsVersions = new Dictionary<string, string>();
-		static private Dictionary<string, object> _settingsLaunchArgs = new Dictionary<string, object>();
-		static private Dictionary<string, object> _settingsConfig = new Dictionary<string, object>();
+		// Note: config values are read from several threads, so these are concurrent dictionaries
+		static private ConcurrentDictionary<string, object> _settingsLaunchArgs = new ConcurrentDictionary<string, object>();
+		static private ConcurrentDictionary<string, object> _settingsConfig = new ConcurrentDictionary<string, object>();
 		static private Dictionary<string, object> _settingsDefaults = new Dictionary<string, object>();
 		static private List<string> _settingsConfigFilesUsed = new List<string>();
 
@@ -362,8 +476,9 @@ namespace WindowsVirtualDesktopHelper {
 			if(_settingsLaunchArgs.ContainsKey(key)) {
 				return _settingsLaunchArgs[key];
 			}
-			if(_settingsConfig.ContainsKey(key)) {
-				return _settingsConfig[key];
+			object configValue;
+			if(_settingsConfig.TryGetValue(key, out configValue)) { // (single lookup: the dictionary may be swapped by ReloadConfig)
+				return configValue;
 			}
 			if(defaultValue != null) {
 				return defaultValue;
@@ -384,6 +499,7 @@ namespace WindowsVirtualDesktopHelper {
 		private static void _set(string key, object value) {
 			// Store in the config
 			_settingsConfig[key] = value;
+			HasUnsavedChanges = true;
 		}
 
 		private static string _getConfigPath() {
@@ -473,27 +589,33 @@ namespace WindowsVirtualDesktopHelper {
 			return _escapeString(val?.ToString()); // string default
 		}
 
-		private static void _loadConfigPath(string path) {
+		private static void _loadConfigPath(string path, ConcurrentDictionary<string, object> target, List<string> filesUsed) {
 			if(System.IO.File.Exists(path)) {
 				// Register the config file as used
-				_settingsConfigFilesUsed.Add(path);
+				filesUsed.Add(path);
 				// Load the config file
 				var lines = System.IO.File.ReadAllLines(path);
 				// Parse the lines, split by colon, adding each to the _settingsConfig
 				foreach(var line in lines) {
-					if(line.Trim().StartsWith("#")) continue; // Skip comments (lines starting with #)
+					var trimmed = line.Trim();
+					if(trimmed == "" || trimmed.StartsWith("#")) continue; // Skip blank lines and comments (lines starting with #)
 					var parts = line.Split(new[] { ':' }, 2); // Split on the first colon only, values may contain colons
-					if(parts.Length >= 2) {
+					if(parts.Length >= 2 && parts[0].Trim() != "") {
 						var key = parts[0].Trim();
 						var val = parts[1].Trim();
-						_settingsConfig[key] = _parseValAsType(val);
+						target[key] = _parseValAsType(val);
+					} else {
+						// Never silently ignore a line: a typo (e.g. "=" instead of ":") would otherwise be invisible
+						Util.Logging.WriteLine($"Settings: ignoring line which is not in the format \"key: value\" in {path}: {trimmed}");
 					}
 				}
 			} else if(System.IO.Directory.Exists(path)) {
-				// Get all .config files in the directory
+				// Get all .config files in the directory, in a stable order (the file system order is not
+				// guaranteed, and later files overwrite the keys of earlier ones)
 				var files = System.IO.Directory.GetFiles(path, "*.config");
+				Array.Sort(files, StringComparer.OrdinalIgnoreCase);
 				foreach(var file in files) {
-					_loadConfigPath(file);
+					_loadConfigPath(file, target, filesUsed);
 				}
 			}
 		}

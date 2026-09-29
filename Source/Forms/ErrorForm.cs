@@ -83,7 +83,12 @@ namespace WindowsVirtualDesktopHelper {
 		public void OpenIssueOnGithub() {
 			var url = "https://github.com/dankrusi/WindowsVirtualDesktopHelper/issues/new";
 			url += $"?title={Uri.EscapeDataString($"WVDH v{GetAppBuildVersion()} / {GetWindowsProductName()} {GetWindowsDisplayVersion()} {GetWindowsBuildVersion()} / Error: {this.labelError.Text}")}";
-			url += $"&body={Uri.EscapeDataString("\n\n" + this.textBoxDetails.Text)}";
+			// The details go into the URL, and browsers/ShellExecute fail on very long URLs, so we keep
+			// only the tail (the most recent lines are the relevant ones) and say so
+			var details = this.textBoxDetails.Text ?? "";
+			const int maxDetailsChars = 2500;
+			if(details.Length > maxDetailsChars) details = "[...truncated...]\n" + details.Substring(details.Length - maxDetailsChars);
+			url += $"&body={Uri.EscapeDataString("\n\n" + details)}";
 			Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
 		}
 

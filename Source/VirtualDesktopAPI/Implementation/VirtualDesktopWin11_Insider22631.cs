@@ -44,7 +44,57 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation {
 
 
 
-	public class VirtualDesktopWin11_Insider22631 : IVirtualDesktopManager {
+	public class VirtualDesktopWin11_Insider22631 : IVirtualDesktopManager, IVirtualDesktopManagerExtended {
+
+		#region Extended API (Windows 11 24H2/25H2)
+
+		public List<string> GetDesktopNames() {
+			var names = new List<string>();
+			var count = DesktopManager.GetTotalVDCount();
+			for (int i = 0; i < count; i++) names.Add(Desktop.DesktopNameFromIndex(i));
+			return names;
+		}
+
+		public int CreateDesktop() {
+			var desktop = Desktop.Create();
+			return Desktop.FromDesktop(desktop);
+		}
+
+		public void RenameDesktop(int index, string name) {
+			Desktop.FromIndex(index).SetName(name ?? "");
+		}
+
+		public void RemoveDesktop(int index) {
+			if (DesktopManager.GetTotalVDCount() <= 1) throw new InvalidOperationException("the last desktop can not be removed");
+			Desktop.FromIndex(index).Remove();
+		}
+
+		public void MoveWindowToDesktop(IntPtr hWnd, int index) {
+			if (DesktopManager.ApplicationViewCollection == null) throw new NotSupportedException("the application view API is not available");
+			Desktop.FromIndex(index).MoveWindow(hWnd);
+		}
+
+		public int GetWindowDesktop(IntPtr hWnd) {
+			if (DesktopManager.VirtualDesktopManager == null) return -1;
+			try {
+				return Desktop.FromDesktop(Desktop.FromWindow(hWnd));
+			} catch (Exception) {
+				return -1;
+			}
+		}
+
+		public bool IsWindowPinned(IntPtr hWnd) {
+			if (DesktopManager.VirtualDesktopPinnedApps == null || DesktopManager.ApplicationViewCollection == null) throw new NotSupportedException("the pinning API is not available");
+			return Desktop.IsWindowPinned(hWnd);
+		}
+
+		public void SetWindowPinned(IntPtr hWnd, bool pinned) {
+			if (DesktopManager.VirtualDesktopPinnedApps == null || DesktopManager.ApplicationViewCollection == null) throw new NotSupportedException("the pinning API is not available");
+			if (pinned) Desktop.PinWindow(hWnd);
+			else Desktop.UnpinWindow(hWnd);
+		}
+
+		#endregion
 
 		#region API
 
@@ -111,9 +161,11 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation {
 		#region COM API
 		internal static class Guids {
 			public static readonly Guid CLSID_ImmersiveShell = new Guid("C2F03A33-21F5-47FA-B4BB-156362A2F239");
-			public static readonly Guid CLSID_VirtualDesktopManagerInternal = new Guid("53F5CA0B-158F-4124-900C-057158060B27");
-			public static readonly Guid CLSID_VirtualDesktopManager = new Guid("A5CD92FF-29BE-454C-8D04-D82879FB3F1B");
-			public static readonly Guid CLSID_VirtualDesktopPinnedApps = new Guid("4CE81583-1E4C-4632-A621-07A53543148F");
+			// Note: this is the service id, which is the same on all builds - the build specific id is the
+			// interface id of IVirtualDesktopManagerInternal (53F5CA0B), which was wrongly used here before
+			public static readonly Guid CLSID_VirtualDesktopManagerInternal = new Guid("C5E0CDCA-7B6E-41B2-9FC4-D93975CC467B");
+			public static readonly Guid CLSID_VirtualDesktopManager = new Guid("AA509086-5CA9-4C25-8F95-589D3C07B48A"); // class id (A5CD92FF is the interface id)
+			public static readonly Guid CLSID_VirtualDesktopPinnedApps = new Guid("B5A399E7-1C87-46B8-88E9-FC5747B171BD"); // service id (4CE81583 is the interface id)
 		}
 
 		[StructLayout(LayoutKind.Sequential)]
@@ -310,9 +362,11 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation {
 			internal static void Reconnect() {
 				var shell = (IServiceProvider10)Activator.CreateInstance(Type.GetTypeFromCLSID(Guids.CLSID_ImmersiveShell));
 				VirtualDesktopManagerInternal = (IVirtualDesktopManagerInternal)shell.QueryService(Guids.CLSID_VirtualDesktopManagerInternal, typeof(IVirtualDesktopManagerInternal).GUID);
-				VirtualDesktopManager = (IVirtualDesktopManager)Activator.CreateInstance(Type.GetTypeFromCLSID(Guids.CLSID_VirtualDesktopManager));
-				ApplicationViewCollection = (IApplicationViewCollection)shell.QueryService(typeof(IApplicationViewCollection).GUID, typeof(IApplicationViewCollection).GUID);
-				VirtualDesktopPinnedApps = (IVirtualDesktopPinnedApps)shell.QueryService(Guids.CLSID_VirtualDesktopPinnedApps, typeof(IVirtualDesktopPinnedApps).GUID);
+				// The following are not used by the app (only by window pinning/moving helpers), so they must
+				// not prevent the implementation from loading if they are unavailable
+				try { VirtualDesktopManager = (IVirtualDesktopManager)Activator.CreateInstance(Type.GetTypeFromCLSID(Guids.CLSID_VirtualDesktopManager)); } catch(Exception) { }
+				try { ApplicationViewCollection = (IApplicationViewCollection)shell.QueryService(typeof(IApplicationViewCollection).GUID, typeof(IApplicationViewCollection).GUID); } catch(Exception) { }
+				try { VirtualDesktopPinnedApps = (IVirtualDesktopPinnedApps)shell.QueryService(Guids.CLSID_VirtualDesktopPinnedApps, typeof(IVirtualDesktopPinnedApps).GUID); } catch(Exception) { }
 			}
 
 			internal static IVirtualDesktopManagerInternal VirtualDesktopManagerInternal;

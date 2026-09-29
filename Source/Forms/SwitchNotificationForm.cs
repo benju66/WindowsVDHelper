@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -46,7 +47,9 @@ namespace WindowsVirtualDesktopHelper {
 			var positionOffset = 40;
 			this.StartPosition = FormStartPosition.Manual;
 			var screen = Screen.FromControl(this); // get main screen
-			if(this.ScreenNumber != null) screen = Screen.AllScreens[this.ScreenNumber.Value]; 
+			// Note: monitors can be unplugged between the caller enumerating them and us, so never index blindly
+			var allScreens = Screen.AllScreens;
+			if(this.ScreenNumber != null && this.ScreenNumber.Value >= 0 && this.ScreenNumber.Value < allScreens.Length) screen = allScreens[this.ScreenNumber.Value];
 			var screenW = screen.WorkingArea.Width;
 			var screenH = screen.WorkingArea.Height;
 			var screenX = screen.WorkingArea.X;
@@ -89,8 +92,40 @@ namespace WindowsVirtualDesktopHelper {
 			SwitchNotificationForm.WillShowNotificationFormEvent?.Invoke(sender, EventArgs.Empty);
 		}
 
+		// Closes all notifications except the given ones (used when re-using overlay forms)
+		public static void CloseAllNotificationsExcept(ICollection<SwitchNotificationForm> keep) {
+			SwitchNotificationForm.WillShowNotificationFormEvent?.Invoke(keep, EventArgs.Empty);
+		}
+
+		public bool IsClosingOrClosed { get; private set; }
+
+		// Re-uses this (already visible) form for a new switch: updates the text and restarts the
+		// display time, without closing and re-opening the window (which flickers)
+		public void Restart(string text, int displayTimeMS) {
+			this.LabelText = text;
+			this.label1.Text = text;
+			this.DisplayTimeMS = displayTimeMS;
+			this.timerAnimate.Stop();
+			this.timerClose.Stop();
+			this.animationDirection = +1;
+			this.animationOpacityTarget = this.Translucent ? 60 : 100;
+			this.animationOpacityCurrent = this.animationOpacityTarget;
+			this.Opacity = this.animationOpacityTarget / 100.0;
+			if (this.DisplayTimeMS > 0) {
+				this.timerClose.Interval = this.DisplayTimeMS;
+				this.timerClose.Start();
+			}
+		}
+
+		protected override void OnFormClosing(FormClosingEventArgs e) {
+			base.OnFormClosing(e);
+			if (!e.Cancel) this.IsClosingOrClosed = true;
+		}
+
 		protected virtual void OnWillShowNotificationForm(object sender, EventArgs e) {
 			if (sender == this) return; // make sure we dont close ourselves
+			var keep = sender as ICollection<SwitchNotificationForm>;
+			if (keep != null && keep.Contains(this)) return;
 
 			// If another SwitchNotification is being shown, then close ourselves
 			this.Close();
@@ -121,7 +156,8 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		private void SwitchNotificationForm_Shown(object sender, EventArgs e) {
-			this.timerClose.Interval = this.DisplayTimeMS;
+			// A duration of zero means "show indefinitely" - and Timer.Interval throws for values below 1
+			if (this.DisplayTimeMS > 0) this.timerClose.Interval = this.DisplayTimeMS;
 
 			if (this.FadeIn) {
 				this.animationOpacityCurrent = 0;
@@ -129,7 +165,7 @@ namespace WindowsVirtualDesktopHelper {
 				if (this.Translucent) this.animationOpacityTarget = 60;
 				else this.animationOpacityTarget = 100;
 				this.timerAnimate.Start();
-			} else {
+			} else if (this.DisplayTimeMS > 0) {
 				this.timerClose.Start();
 			}
 		}
@@ -161,7 +197,7 @@ namespace WindowsVirtualDesktopHelper {
 				this.animationOpacityCurrent = this.animationOpacityTarget;
 				this.timerAnimate.Enabled = false;
 				if (this.animationDirection == +1) {
-					this.timerClose.Start();
+					if (this.DisplayTimeMS > 0) this.timerClose.Start();
 				} else {
 					this.Close();
 				}

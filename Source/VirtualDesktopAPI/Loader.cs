@@ -35,6 +35,15 @@ namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI {
 				return VirtualDesktopServer2022;
 			}
 
+			// Windows 11 24H2 (26100) and 25H2 (26200) use the IVirtualDesktopManagerInternal interface
+			// 53F5CA0B (incl. SwitchDesktopAndMoveForegroundView), which is what the Insider22631 implementation
+			// declares. Without this, these builds first tried the 23H2 interface (A3175F2D), which fails, and
+			// only worked by falling back through the chain
+			if(currentBuild >= 26100 && currentBuild < 27000) {
+				Util.Logging.WriteLine("GetImplementationForOS: Detected Windows 11 24H2/25H2 due to build >= 26100");
+				return VirtualDesktopWin11_Insider22631;
+			}
+
 			if(currentBuild >= 25314) {
 				Util.Logging.WriteLine("GetImplementationForOS: Detected Windows 11 Insider Canary 25314 due to build >= 25314");
 				return VirtualDesktopWin11_Insider25314;

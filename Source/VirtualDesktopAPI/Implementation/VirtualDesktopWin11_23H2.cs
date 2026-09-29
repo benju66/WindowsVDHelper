@@ -4,7 +4,6 @@
 
 using System;
 using System.Runtime.InteropServices;
-using static WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation.VirtualDesktopWin11_Insider;
 
 namespace WindowsVirtualDesktopHelper.VirtualDesktopAPI.Implementation {
 

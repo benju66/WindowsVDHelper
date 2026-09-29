@@ -17,10 +17,28 @@ namespace WindowsVirtualDesktopHelper.Util {
 		[DllImport("user32.dll", SetLastError = true)]
 		private static extern bool DestroyIcon(IntPtr hIcon);
 
-		public static Icon GenerateNotificationIcon(string text, string theme, int dpi, bool drawAsSymbol, double opacity = 1.0) {
+		[DllImport("user32.dll")]
+		private static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
+
+		private const int SM_CXSMICON = 49;
+
+		public static int GetTrayIconSize(int dpi) {
+			if (dpi <= 0) dpi = 96;
+			try {
+				var size = GetSystemMetricsForDpi(SM_CXSMICON, (uint)dpi); // Windows 10 1607+
+				if (size > 0) return size;
+			} catch (EntryPointNotFoundException) {
+				// older Windows: fall through
+			}
+			return (int)Math.Round(16.0 * dpi / 96.0);
+		}
+
+		public static Icon GenerateNotificationIcon(string text, string theme, int dpi, bool drawAsSymbol, double opacity = 1.0, string colorOverride = null) {
 			// Init
-			var size = 16;
-			if (dpi > 96) size = 64;
+			// Render at exactly the size the tray uses at this DPI (e.g. 20px at 125%, 24px at 150%). Previously
+			// the icon was either 16px or 64px, so on scaled displays Windows had to shrink the 64px icon itself,
+			// with poor filtering, which made the thin text blurry
+			var size = GetTrayIconSize(dpi);
 			var renderSize = 128; // GDI has really weak text drawing on transparent, so to get best results we render large then downscale...
 			var textToRender = text;
 			if (textToRender == null) textToRender = ""; // sanity
@@ -52,7 +70,7 @@ namespace WindowsVirtualDesktopHelper.Util {
 			var textSize = renderSize * textToRenderSizeRatio;
 
 			// Cache hit?
-			var cacheKey = textToRender + "_" + textSize + "_" + size + "_" + theme + "_" + fontStyle + "_" + opacity;
+			var cacheKey = textToRender + "_" + textSize + "_" + size + "_" + theme + "_" + fontStyle + "_" + opacity + "_" + colorOverride;
 			Icon cachedIcon;
 			if (_cache.TryGetValue(cacheKey, out cachedIcon)) {
 				return cachedIcon;
@@ -60,6 +78,9 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 			// Theme
 			var fgColor = ColorTranslator.FromHtml(Settings.GetString("theme.icons.iconFG." + theme));
+			if (!string.IsNullOrWhiteSpace(colorOverride)) {
+				try { fgColor = ColorTranslator.FromHtml(colorOverride.Trim()); } catch (Exception) { /* invalid color: keep the theme color */ }
+			}
 			if (opacity != 1.0) fgColor = Color.FromArgb((int)(255.0f * opacity), fgColor);
 
 			Icon icon;

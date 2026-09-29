@@ -45,7 +45,9 @@ namespace WindowsVirtualDesktopHelper {
 			var positionOffset = Settings.GetInt("theme.status.offset");
 			this.StartPosition = FormStartPosition.Manual;
 			var screen = Screen.FromControl(this); // get main screen
-			if(this.ScreenNumber != null) screen = Screen.AllScreens[this.ScreenNumber.Value]; 
+			// Note: monitors can be unplugged between the caller enumerating them and us, so never index blindly
+			var allScreens = Screen.AllScreens;
+			if(this.ScreenNumber != null && this.ScreenNumber.Value >= 0 && this.ScreenNumber.Value < allScreens.Length) screen = allScreens[this.ScreenNumber.Value];
 			var screenW = screen.WorkingArea.Width;
 			var screenH = screen.WorkingArea.Height;
 			var screenX = screen.WorkingArea.X;
@@ -81,6 +83,12 @@ namespace WindowsVirtualDesktopHelper {
 				if (this.Translucent) this.Opacity = 0.6;
 				else this.Opacity = 1.0;
 			}
+		}
+
+		// Updates the text of this (already visible) overlay, instead of re-creating the window
+		public void UpdateText(string text) {
+			this.LabelText = text;
+			this.label1.Text = text;
 		}
 
 		public static void CloseAllNotifications(object sender) {

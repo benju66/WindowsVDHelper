@@ -12,6 +12,28 @@ namespace WindowsVirtualDesktopHelper {
 		public AppForm() {
 			// Init UI
 			InitializeComponent();
+
+			// The tray menu gets the desktop list and actions added each time it opens, and is
+			// also available on the desktop name icon
+			this.notifyIconName.ContextMenuStrip = this.contextMenuStrip1;
+			this.contextMenuStrip1.Opening += contextMenuStrip1_Opening;
+		}
+
+		private readonly System.Collections.Generic.List<ToolStripItem> _dynamicMenuItems = new System.Collections.Generic.List<ToolStripItem>();
+
+		private void contextMenuStrip1_Opening(object sender, System.ComponentModel.CancelEventArgs e) {
+			try {
+				foreach (var item in _dynamicMenuItems) {
+					this.contextMenuStrip1.Items.Remove(item);
+					item.Dispose();
+				}
+				_dynamicMenuItems.Clear();
+				var items = App.Instance.BuildTrayMenuItems();
+				for (var i = 0; i < items.Count; i++) this.contextMenuStrip1.Items.Insert(i, items[i]);
+				_dynamicMenuItems.AddRange(items);
+			} catch (Exception ex) {
+				Util.Logging.WriteLine("AppForm: Error building the tray menu: " + ex.Message);
+			}
 		}
 
 
@@ -56,6 +78,7 @@ namespace WindowsVirtualDesktopHelper {
 
 		private void StartUp() {
 			App.Instance.ShowSplash();
+			App.Instance.StartVDNotifications();
 			App.Instance.MonitorVDSwitch();
 			App.Instance.MonitorSystemThemeSwitch();
 			App.Instance.MonitorVDisplayCount();
@@ -66,6 +89,37 @@ namespace WindowsVirtualDesktopHelper {
 			App.Instance.UpdateStatusOverlayWindows();
 
 			App.Instance.UIUpdate();
+
+			App.Instance.StartConfigWatcher();
+			App.Instance.NotifyHotKeyConflicts();
+		}
+
+		// System events we react to instead of polling
+		private static readonly int WM_TASKBARCREATED = (int)Util.OS.RegisterWindowMessage("TaskbarCreated");
+		private const int WM_SETTINGCHANGE = 0x001A;
+		private const int WM_DISPLAYCHANGE = 0x007E;
+		private const int WM_DPICHANGED = 0x02E0;
+
+		protected override void WndProc(ref Message m) {
+			base.WndProc(ref m);
+			if (App.Instance == null || !_startupDone) return;
+			try {
+				if (m.Msg == WM_TASKBARCREATED && WM_TASKBARCREATED != 0) {
+					// explorer.exe (re)started: its virtual desktop API objects and our notification
+					// registration are gone. Deferred a bit, so the shell is ready when we reconnect
+					var timer = new Timer { Interval = 2000 };
+					timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); App.Instance.OnExplorerRestarted(); };
+					timer.Start();
+				} else if (m.Msg == WM_SETTINGCHANGE) {
+					var area = m.LParam != IntPtr.Zero ? System.Runtime.InteropServices.Marshal.PtrToStringUni(m.LParam) : null;
+					if (area == "ImmersiveColorSet") App.Instance.CheckThemeChanged(); // dark/light mode switched
+				} else if (m.Msg == WM_DISPLAYCHANGE || m.Msg == WM_DPICHANGED) {
+					// Scaling or monitors changed: re-render the tray icons for the new size
+					App.Instance.UIUpdateIcons();
+				}
+			} catch (Exception ex) {
+				Util.Logging.WriteLine("AppForm: Error handling window message " + m.Msg + ": " + ex.Message);
+			}
 		}
 
 		private void AppForm_Load(object sender, EventArgs e) {
@@ -98,33 +152,29 @@ namespace WindowsVirtualDesktopHelper {
 		#region Menu and Icon Tray Events
 
 		private void contextMenuStrip1_ItemClicked(object sender, ToolStripItemClickedEventArgs e) {
-			if(e.ClickedItem.Tag.ToString() == "exit") App.Instance.Exit();
-			else if(e.ClickedItem.Tag.ToString() == "settings") App.Instance.ShowSettings();
-			else if(e.ClickedItem.Tag.ToString() == "about") App.Instance.ShowAbout();
-			else if(e.ClickedItem.Tag.ToString() == "donate") App.Instance.OpenDonatePage();
+			var tag = e.ClickedItem.Tag as string; // the desktop items have no tag, they handle their own clicks
+			if(tag == "exit") App.Instance.Exit();
+			else if(tag == "settings") App.Instance.ShowSettings();
+			else if(tag == "about") App.Instance.ShowAbout();
+			else if(tag == "donate") App.Instance.OpenDonatePage();
 		}
 
-		private void notifyIconPrev_Click(object sender, EventArgs e) {
-			App.Instance.SwitchDesktopBackward();
+		// Note: NotifyIcon.Click is raised for right-clicks too, so we use MouseClick and check the button.
+		// A quick second click is delivered as a double-click (and no second MouseClick), so the same
+		// handler serves MouseDoubleClick, otherwise every second click of a rapid series would be lost
+		private void notifyIconPrev_MouseClick(object sender, MouseEventArgs e) {
+			if(e.Button == MouseButtons.Left) App.Instance.SwitchDesktopBackward();
 		}
 
-		private void notifyIconNext_Click(object sender, EventArgs e) {
-			App.Instance.SwitchDesktopForward();
-		}
-
-		private void notifyIconPrev_DoubleClick(object sender, EventArgs e) {
-			//TODO: got to first desktop
-		}
-
-		private void notifyIconNext_DoubleClick(object sender, EventArgs e) {
-			//TODO: go to last desktop
+		private void notifyIconNext_MouseClick(object sender, MouseEventArgs e) {
+			if(e.Button == MouseButtons.Left) App.Instance.SwitchDesktopForward();
 		}
 
 		private void notifyIconName_MouseClick(object sender, MouseEventArgs e) {
 			if(Settings.GetBool("feature.showDesktopNumberInIconTray.clickToOpenTaskView")) {
 				if(e.Button == MouseButtons.Left) {
 					// Already open?
-					if(App.Instance.FGWindowHistory.Contains("Task View")) {
+					if(App.Instance.IsTaskViewOpen()) {
 						// Do nothing
 					} else {
 						Util.OS.OpenTaskView();
@@ -137,7 +187,7 @@ namespace WindowsVirtualDesktopHelper {
 			if (Settings.GetBool("feature.showDesktopNumberInIconTray.clickToOpenTaskView")) {
 				if(e.Button == MouseButtons.Left) {
 					// Already open?
-					if(App.Instance.FGWindowHistory.Contains("Task View")) {
+					if(App.Instance.IsTaskViewOpen()) {
 						// Do nothing
 					} else {
 						Util.OS.OpenTaskView();

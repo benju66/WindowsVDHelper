@@ -71,11 +71,19 @@ namespace WindowsVirtualDesktopHelper {
 			this.radioButtonStatusOverlayPositionBottomRight.Checked = Settings.GetString("feature.showDesktopStatusOverlay.position") == "bottomright";
 
 
-			checkBoxShowOverlay_CheckedChanged(this, null);
-			checkBoxShowStatusOverlay_CheckedChanged(this, null);
-			checkBoxUseHotKeysToJumpToDesktop_CheckedChanged(this, null);
+			SyncDependentControls();
 		}
 		
+		// Re-reads all settings into the controls, e.g. after the config file was edited
+		public void ReloadFromSettings() {
+			IsLoading = true;
+			try {
+				LoadSettingsIntoUI();
+			} finally {
+				IsLoading = false;
+			}
+		}
+
 		private void SaveSettingsFromUI() {
 			// Save user settings to storage
 			Settings.SaveConfig();
@@ -119,10 +127,16 @@ namespace WindowsVirtualDesktopHelper {
 			if(IsLoading) return;
 			Settings.SetBool("general.startupWithWindows", this.checkBoxStartupWithWindows.Checked);
 
-			if(checkBoxStartupWithWindows.Checked) {
-				App.Instance.EnableStartupWithWindows();
-			} else {
-				App.Instance.DisableStartupWithWindows();
+			try {
+				if(checkBoxStartupWithWindows.Checked) {
+					App.Instance.EnableStartupWithWindows();
+				} else {
+					App.Instance.DisableStartupWithWindows();
+				}
+			} catch(Exception ex) {
+				// e.g. the registry key is not writable (group policy): tell the user instead of crashing
+				Util.Logging.WriteLine("SettingsForm: Error: " + ex.Message);
+				MessageBox.Show("Could not change the startup with Windows setting:\n\n" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 			}
 		}
 
@@ -154,35 +168,59 @@ namespace WindowsVirtualDesktopHelper {
 			if(IsLoading) return;
 			Settings.SetBool("feature.showDesktopSwitchOverlay", this.checkBoxShowOverlay.Checked);
 
-			radioButtonOverlayMicroDuration.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonOverlayShortDuration.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonOverlayMediumDuration.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonOverlayLongDuration.Enabled = checkBoxShowOverlay.Checked;
-			checkBoxOverlayAnimate.Enabled = checkBoxShowOverlay.Checked;
-			checkBoxOverlayTranslucent.Enabled = checkBoxShowOverlay.Checked;
-			checkBoxOverlayShowOnAllMonitors.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionTopLeft.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionTopCenter.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionTopRight.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionMiddleLeft.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionMiddleCenter.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionMiddleRight.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionBottomLeft.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionBottomCenter.Enabled = checkBoxShowOverlay.Checked;
-			radioButtonPositionBottomRight.Enabled = checkBoxShowOverlay.Checked;
-
+			SyncDependentControls();
 		}
 
 		private void checkBoxUseHotKeysToJumpToDesktop_CheckedChanged(object sender, EventArgs e) {
 			if(IsLoading) return;
 			Settings.SetBool("feature.useHotKeyToJumpToDesktopNumber", this.checkBoxUseHotKeysToJumpToDesktop.Checked);
 
-			radioButtonUseHotKeysToJumpToDesktopAlt.Enabled = checkBoxUseHotKeysToJumpToDesktop.Checked;
-			radioButtonUseHotKeysToJumpToDesktopAltShift.Enabled = checkBoxUseHotKeysToJumpToDesktop.Checked;
-			radioButtonUseHotKeysToJumpToDesktopCtrl.Enabled = checkBoxUseHotKeysToJumpToDesktop.Checked;
-			radioButtonUseHotKeysToJumpToDesktopCtrlAlt.Enabled = checkBoxUseHotKeysToJumpToDesktop.Checked;
+			SyncDependentControls();
 
 			App.Instance.SetupHotKeys();
+		}
+
+		// Enables/disables the controls which only make sense when their parent option is on.
+		// This is separate from the CheckedChanged handlers as those return early while loading, which
+		// is exactly when the initial state needs to be synced
+		private void SyncDependentControls() {
+			var overlay = checkBoxShowOverlay.Checked;
+			radioButtonOverlayMicroDuration.Enabled = overlay;
+			radioButtonOverlayShortDuration.Enabled = overlay;
+			radioButtonOverlayMediumDuration.Enabled = overlay;
+			radioButtonOverlayLongDuration.Enabled = overlay;
+			checkBoxOverlayAnimate.Enabled = overlay;
+			checkBoxOverlayTranslucent.Enabled = overlay;
+			checkBoxOverlayShowOnAllMonitors.Enabled = overlay;
+			radioButtonPositionTopLeft.Enabled = overlay;
+			radioButtonPositionTopCenter.Enabled = overlay;
+			radioButtonPositionTopRight.Enabled = overlay;
+			radioButtonPositionMiddleLeft.Enabled = overlay;
+			radioButtonPositionMiddleCenter.Enabled = overlay;
+			radioButtonPositionMiddleRight.Enabled = overlay;
+			radioButtonPositionBottomLeft.Enabled = overlay;
+			radioButtonPositionBottomCenter.Enabled = overlay;
+			radioButtonPositionBottomRight.Enabled = overlay;
+
+			var statusOverlay = checkBoxShowStatusOverlay.Checked;
+			checkBoxStatusOverlayAnimate.Enabled = statusOverlay;
+			checkBoxStatusOverlayTranslucent.Enabled = statusOverlay;
+			checkBoxStatusOverlayShowOnAllMonitors.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionTopLeft.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionTopCenter.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionTopRight.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionMiddleLeft.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionMiddleCenter.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionMiddleRight.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionBottomLeft.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionBottomCenter.Enabled = statusOverlay;
+			radioButtonStatusOverlayPositionBottomRight.Enabled = statusOverlay;
+
+			var hotkeys = checkBoxUseHotKeysToJumpToDesktop.Checked;
+			radioButtonUseHotKeysToJumpToDesktopAlt.Enabled = hotkeys;
+			radioButtonUseHotKeysToJumpToDesktopAltShift.Enabled = hotkeys;
+			radioButtonUseHotKeysToJumpToDesktopCtrl.Enabled = hotkeys;
+			radioButtonUseHotKeysToJumpToDesktopCtrlAlt.Enabled = hotkeys;
 		}
 
 		private void radioButtonUseHotKeysToJumpToDesktopAlt_CheckedChanged(object sender, EventArgs e) {
@@ -324,18 +362,7 @@ namespace WindowsVirtualDesktopHelper {
 			if(IsLoading) return;
 			Settings.SetBool("feature.showDesktopStatusOverlay", this.checkBoxShowStatusOverlay.Checked);
 
-			checkBoxStatusOverlayAnimate.Enabled = checkBoxShowStatusOverlay.Checked;
-			checkBoxStatusOverlayTranslucent.Enabled = checkBoxShowStatusOverlay.Checked;
-			checkBoxStatusOverlayShowOnAllMonitors.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionTopLeft.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionTopCenter.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionTopRight.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionMiddleLeft.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionMiddleCenter.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionMiddleRight.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionBottomLeft.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionBottomCenter.Enabled = checkBoxShowStatusOverlay.Checked;
-			radioButtonStatusOverlayPositionBottomRight.Enabled = checkBoxShowStatusOverlay.Checked;
+			SyncDependentControls();
 		}
 
 		private void checkBoxStatusOverlayAnimate_CheckedChanged(object sender, EventArgs e) {

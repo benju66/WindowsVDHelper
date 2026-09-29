@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Builds Source\ with just the .NET SDK (no Visual Studio, no .NET Framework 4.7.2 targeting pack):
+    compiles against the .NET Framework installed with Windows. Use Scripts\build-local.ps1.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <FrameworkPathOverride>$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319</FrameworkPathOverride>
+    <AssemblyName>WindowsVirtualDesktopHelper</AssemblyName>
+    <RootNamespace>WindowsVirtualDesktopHelper</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <DebugType>none</DebugType>
+    <NoWarn>CS0168;CS0219;CS0649;CS0169;CS0414;CS0108;CS0618;CS0067</NoWarn>
+    <SourceDir>$(MSBuildThisFileDirectory)..\..\Source\</SourceDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(SourceDir)**\*.cs" Exclude="$(SourceDir)obj\**;$(SourceDir)bin\**" />
+    <!-- The .resx files are converted to .resources by resgen\ (see build-local.ps1) -->
+    <EmbeddedResource Include="obj\res\*.resources" LogicalName="WindowsVirtualDesktopHelper.%(Filename).resources" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Core" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+</Project>
