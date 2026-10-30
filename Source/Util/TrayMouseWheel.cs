@@ -8,16 +8,26 @@ using System.Windows.Forms;
 namespace WindowsVirtualDesktopHelper.Util {
 
 	/// <summary>
-	/// Raises <see cref="Scrolled"/> when the mouse wheel is turned over one of the given tray icons.
+	/// Raises <see cref="Scrolled"/> when the mouse wheel is turned over one of the given tray icons (if
+	/// <see cref="OverIcons"/>), or anywhere while exactly the <see cref="Modifiers"/> keys are held (e.g. Win + Alt).
 	/// NotifyIcon has no wheel events, so this uses a low level mouse hook and compares the cursor position
 	/// with the icons' screen rectangles (Shell_NotifyIconGetRect). The hook callback must be very fast
 	/// (Windows removes slow low level hooks), so it runs on the hook thread, only looks at wheel messages and the
-	/// handler is posted to the UI thread.
+	/// handler is posted to the UI thread. The wheel events it handles are swallowed (the window under the cursor
+	/// doesn't scroll).
 	/// </summary>
 	public class TrayMouseWheel : IDisposable {
 
 		// +1 = wheel down (next desktop), -1 = wheel up (previous desktop)
 		public event Action<int> Scrolled;
+
+		// Scrolling over the tray icons raises Scrolled
+		public volatile bool OverIcons = true;
+		// Scrolling anywhere with exactly these modifier keys held raises Scrolled; 0 = off
+		public volatile ModifierKey Modifiers = 0;
+
+		[Flags]
+		public enum ModifierKey { Ctrl = 1, Alt = 2, Shift = 4, Win = 8 }
 
 		private readonly Control _uiThread;
 		private readonly NotifyIcon[] _icons;
@@ -54,10 +64,17 @@ namespace WindowsVirtualDesktopHelper.Util {
 			try {
 				if (nCode >= 0 && (int)wParam == WM_MOUSEWHEEL) {
 					var data = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
-					if (_isOverIcon(data.pt)) {
+					var modifiers = Modifiers;
+					var withModifiers = modifiers != 0 && _heldModifiers() == modifiers;
+					if (withModifiers || (OverIcons && _isOverIcon(data.pt))) {
 						var delta = (short)((data.mouseData >> 16) & 0xFFFF);
 						var direction = delta < 0 ? +1 : -1;
-						_uiThread.BeginInvoke((Action)(() => Scrolled?.Invoke(direction)));
+						_uiThread.BeginInvoke((Action)(() => {
+							// Releasing Win alone opens the Start menu, Alt alone the window's menu bar: the scroll isn't a key
+							// press, so Windows still thinks the modifier was pressed alone. A key press in between prevents that
+							if (withModifiers) _pressMaskKey();
+							Scrolled?.Invoke(direction);
+						}));
 						return (IntPtr)1; // handled
 					}
 				}
@@ -75,6 +92,40 @@ namespace WindowsVirtualDesktopHelper.Util {
 				if (pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom) return true;
 			}
 			return false;
+		}
+
+		private static bool _isDown(int vk) {
+			return (GetAsyncKeyState(vk) & 0x8000) != 0;
+		}
+
+		private static ModifierKey _heldModifiers() {
+			ModifierKey held = 0;
+			if (_isDown(VK_CONTROL)) held |= ModifierKey.Ctrl;
+			if (_isDown(VK_MENU)) held |= ModifierKey.Alt;
+			if (_isDown(VK_SHIFT)) held |= ModifierKey.Shift;
+			if (_isDown(VK_LWIN) || _isDown(VK_RWIN)) held |= ModifierKey.Win;
+			return held;
+		}
+
+		// Presses and releases an unassigned key (0xE8, which AutoHotkey uses for the same purpose)
+		private static void _pressMaskKey() {
+			keybd_event(VK_MASK, 0, 0, UIntPtr.Zero);
+			keybd_event(VK_MASK, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+		}
+
+		// Parses "Win + Alt" (the order and case don't matter); 0 if empty or not only modifier keys
+		public static ModifierKey ParseModifiers(string keys) {
+			ModifierKey result = 0;
+			foreach (var part in (keys ?? "").Split('+')) {
+				var key = part.Trim().ToLowerInvariant();
+				if (key == "") continue;
+				if (key == "ctrl" || key == "control") result |= ModifierKey.Ctrl;
+				else if (key == "alt") result |= ModifierKey.Alt;
+				else if (key == "shift") result |= ModifierKey.Shift;
+				else if (key == "win" || key == "windows") result |= ModifierKey.Win;
+				else return 0;
+			}
+			return result;
 		}
 
 		// The screen rectangle of a tray icon, or null if it isn't shown (e.g. in the overflow area)
@@ -131,6 +182,15 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 		private const int WH_MOUSE_LL = 14;
 		private const int WM_MOUSEWHEEL = 0x020A;
+		private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+		private const byte VK_MASK = 0xE8;
+		private const uint KEYEVENTF_KEYUP = 0x2;
+
+		[DllImport("user32.dll")]
+		private static extern short GetAsyncKeyState(int vKey);
+
+		[DllImport("user32.dll")]
+		private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
 		[StructLayout(LayoutKind.Sequential)]
 		private struct POINT { public int x; public int y; }

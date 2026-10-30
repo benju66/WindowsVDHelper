@@ -233,6 +233,12 @@ namespace WindowsVirtualDesktopHelper.Forms {
 			c.Add(ToggleCard("", "Wrap around", "Next on the last desktop goes to the first, and previous on the first to the last", "feature.wrapAround"));
 			c.Add(ToggleCard("", "Detect switches instantly", "Uses Windows' own notifications instead of checking regularly. Turn off if the tray number stops updating", "feature.useShellNotifications"));
 			c.Add(ToggleCard("", "Restore the focused window", "When switching back to a desktop, focus the window you used there last", "feature.restorePreviousWindowFocus"));
+			var wheel = Settings.GetBool("feature.mouseWheelWithModifiers");
+			var wheelKeys = Settings.GetString("feature.mouseWheelWithModifiers.keys") ?? "";
+			var wheelOptions = new List<KeyValuePair<string, string>> { O("Win + Alt", "Win + Alt"), O("Ctrl + Win", "Ctrl + Win"), O("Ctrl + Alt", "Ctrl + Alt"), O("Win + Shift", "Win + Shift") };
+			if (!wheelOptions.Any(o => o.Key == wheelKeys)) wheelOptions.Add(O(wheelKeys, wheelKeys)); // edited in the config file
+			c.Add(ToggleCard("", "Hold keys and scroll to switch desktops", "Scroll the mouse wheel anywhere while holding the keys", "feature.mouseWheelWithModifiers"));
+			c.Add(DropDownCard(null, "Keys", null, wheelOptions, wheelKeys, v => Settings.SetString("feature.mouseWheelWithModifiers.keys", v), indent: true, enabled: wheel));
 
 			if (extended) {
 				c.Add(Section("Windows"));
@@ -248,8 +254,34 @@ namespace WindowsVirtualDesktopHelper.Forms {
 					c.Add(Card("", process, null, remove));
 				}
 				var add = Button("Add an app", "", () => { });
-				add.Click += (s, e) => ShowAddAppMenu(add);
+				add.Click += (s, e) => ShowAddAppMenu(add, apps, process => App.Instance.SetAutoPinnedProcess(process, true));
 				c.Add(Card(apps.Count == 0 ? "" : null, apps.Count == 0 ? "No apps yet" : "Add another app", "Pick one of the apps you have open", add));
+
+				c.Add(Section("Open on a desktop"));
+				c.Add(Note("New windows of these apps open on their desktop, and you go along if you opened them.\nAn app that reuses a window it has open on another desktop still takes you there."));
+				var rules = App.Instance.GetAppDesktopRules();
+				List<string> desktopNames;
+				try { desktopNames = App.Instance.VDAPIExtended.GetDesktopNames(); } catch (Exception) { desktopNames = new List<string>(); }
+				foreach (var rule in rules) {
+					var process = rule.Key;
+					var index = App.Instance.GetRuleDesktopIndex(rule.Value);
+					var options = desktopNames.Select(n => O(n, n)).ToList();
+					if (index < 0) options.Add(O(rule.Value, rule.Value));
+					var dropDown = new ModernDropDown(_scale, options, index >= 0 ? desktopNames[index] : rule.Value);
+					dropDown.ValueChanged += v => Apply(() => App.Instance.SetAppDesktopRule(process, v));
+					var remove = Button("Remove", "", () => Apply(() => App.Instance.SetAppDesktopRule(process, null)));
+					var actions = new StackRow(_scale, S(36)) { Width = dropDown.Width + S(8) + remove.Width, BackColor = Theme.Card };
+					actions.Controls.Add(dropDown);
+					actions.Controls.Add(remove);
+					var card = Card("", process, index < 0 ? "There is no desktop \"" + rule.Value + "\" now: its windows stay where they open" : null, actions);
+					if (index < 0) card.DescriptionColor = Theme.Danger;
+					c.Add(card);
+				}
+				var addRule = Button("Add an app", "", () => { });
+				var current = (int)App.Instance.CurrentVDDisplayNumber;
+				var currentDesktop = current < desktopNames.Count ? desktopNames[current] : "1";
+				addRule.Click += (s, e) => ShowAddAppMenu(addRule, rules.Select(r => r.Key), process => App.Instance.SetAppDesktopRule(process, currentDesktop));
+				c.Add(Card(rules.Count == 0 ? "" : null, rules.Count == 0 ? "No apps yet" : "Add another app", "Pick one of the apps you have open; it starts on this desktop, change it above", addRule));
 			}
 
 			c.Add(Section("Config file"));
@@ -257,9 +289,10 @@ namespace WindowsVirtualDesktopHelper.Forms {
 			c.Add(Card("", "Settings file", Settings.GetConfigDirectory(), Button("Open folder", null, () => Open(Settings.GetConfigDirectory()))));
 		}
 
-		private void ShowAddAppMenu(Control anchor) {
+		// A menu of the apps which are open (and not in the list yet); picking one runs add with its process name
+		private void ShowAddAppMenu(Control anchor, IEnumerable<string> alreadyAdded, Action<string> add) {
 			var menu = new ContextMenuStrip { RenderMode = ToolStripRenderMode.ManagerRenderMode, ShowImageMargin = true, ShowCheckMargin = false, ImageScalingSize = new Size(S(16), S(16)) };
-			var existing = new HashSet<string>(App.Instance.GetAutoPinApps(), StringComparer.OrdinalIgnoreCase);
+			var existing = new HashSet<string>(alreadyAdded, StringComparer.OrdinalIgnoreCase);
 			var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			foreach (var window in Util.OS.GetAppWindows()) {
 				if (!App.Instance.IsUserWindow(window)) continue;
@@ -267,7 +300,7 @@ namespace WindowsVirtualDesktopHelper.Forms {
 				if (process == "" || existing.Contains(process) || !seen.Add(process)) continue;
 				var name = Util.OS.GetWindowAppName(window);
 				var item = new ToolStripMenuItem(string.Equals(name, process, StringComparison.OrdinalIgnoreCase) ? process : $"{name}  ({process})") { Image = Util.MenuIcons.ForWindow(window) };
-				item.Click += (s, e) => Apply(() => App.Instance.SetAutoPinnedProcess(process, true));
+				item.Click += (s, e) => Apply(() => add(process));
 				menu.Items.Add(item);
 			}
 			if (menu.Items.Count == 0) menu.Items.Add(new ToolStripMenuItem("No other apps are open") { Enabled = false });
@@ -308,6 +341,7 @@ namespace WindowsVirtualDesktopHelper.Forms {
 			new ShortcutDef { Feature = "feature.useHotKeyToJumpToPreviousDesktop", Title = "Back to the last used desktop", Description = "Like Alt + Tab, but for desktops" },
 			new ShortcutDef { Feature = "feature.useHotKeyToSwitchDesktopForward", Title = "Next desktop", Description = "Windows' own: Ctrl + Win + Right" },
 			new ShortcutDef { Feature = "feature.useHotKeyToSwitchDesktopBackward", Title = "Previous desktop", Description = "Windows' own: Ctrl + Win + Left" },
+			new ShortcutDef { Feature = "feature.useHotKeyToShowPanel", Title = "Open the panel", Description = "The tray panel, at the mouse cursor if the tray number is hidden. Press again to close" },
 		};
 
 		private static readonly ShortcutDef[] WindowShortcuts = {
@@ -335,7 +369,9 @@ namespace WindowsVirtualDesktopHelper.Forms {
 
 			c.Add(Section("Mouse"));
 			c.Add(Card("", "Right-click the tray number", "Opens the panel: desktops, the current window, pinned windows", null));
+			c.Add(Card("", "Start the app again", "From the Start menu or a pinned taskbar icon: opens the panel", null));
 			c.Add(Card("", "Scroll over the tray number", "Switches desktops", null));
+			if (Settings.GetBool("feature.mouseWheelWithModifiers")) c.Add(Card("", "Hold " + Settings.GetString("feature.mouseWheelWithModifiers.keys") + " and scroll", "Switches desktops, anywhere on the screen", null));
 			if (extended) c.Add(Card("", "Ctrl + right-click a title bar", "The window menu for that window", null));
 
 			c.Add(Section("Built into Windows"));

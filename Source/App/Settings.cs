@@ -129,8 +129,13 @@ namespace WindowsVirtualDesktopHelper {
 			// Feature: apps which are always shown on all desktops
 			RegisterDefault("feature.autoPin.apps", "", "Comma separated process names (e.g. \"Spotify, ms-teams\") of apps which are automatically shown on all desktops", "v2.2");
 
+			// Feature: new windows of some apps open on a given desktop
+			RegisterDefault("feature.appDesktops.rules", "", "Apps whose new windows open on a given desktop: process name = desktop name (or number), separated by semicolons, e.g. \"explorer = Files; OUTLOOK = Mail\"", "v2.3");
+
 			// Feature: tray panel (right-click on the desktop number) instead of the classic menu
 			RegisterDefault("feature.trayFlyout", true, "true - right-click on the tray icon opens the panel (desktops, current window, pinned windows); false - the classic menu", "v2.2");
+			RegisterDefault("feature.useHotKeyToShowPanel", false, "Open the tray panel with a hotkey (starting the app again, e.g. from the Start menu or a pinned taskbar icon, opens it too)", "v2.3");
+			RegisterDefault("feature.useHotKeyToShowPanel.hotkey", "Ctrl + Alt + Space");
 
 			// Feature: window menu (desktop actions for a window, at the mouse cursor)
 			RegisterDefault("feature.useHotKeyToShowWindowMenu", true, "Open the window menu (move, pin, ...) for the active window", "v2.2");
@@ -139,6 +144,8 @@ namespace WindowsVirtualDesktopHelper {
 
 			// Feature: mouse wheel over the tray icons switches desktops
 			RegisterDefault("feature.mouseWheelOnTrayIcons", true, "Scroll the mouse wheel over the tray icons to switch desktops", "v2.2");
+			RegisterDefault("feature.mouseWheelWithModifiers", true, "Scroll the mouse wheel anywhere while holding the keys below to switch desktops", "v2.3");
+			RegisterDefault("feature.mouseWheelWithModifiers.keys", "Win + Alt", "Modifier keys only, e.g. \"Win + Alt\", \"Ctrl + Win\" or \"Ctrl + Alt\"");
 
 			// Feature: wrap around when switching forward/backward past the last/first desktop
 			RegisterDefault("feature.wrapAround", false, "If enabled, switching forward on the last desktop goes to the first (and backward on the first to the last)", "v2.2");

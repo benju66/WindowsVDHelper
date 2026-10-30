@@ -110,6 +110,7 @@ namespace WindowsVirtualDesktopHelper {
 			App.Instance.UpdateTrayMouseWheel();
 			App.Instance.UpdateTitleBarMenuHook();
 			try { App.Instance.ApplyAutoPinToAllWindows(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error applying auto pin: " + ex.Message); }
+			try { App.Instance.UpdateNewWindowWatcher(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error watching new windows: " + ex.Message); }
 			App.Instance.NotifyHotKeyConflicts();
 
 			// From now on an exception in an event handler (a click, a timer, a window message) is logged and the app

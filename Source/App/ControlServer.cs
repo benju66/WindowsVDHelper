@@ -23,7 +23,7 @@ namespace WindowsVirtualDesktopHelper {
 	/// Protocol: the client sends one line of JSON, e.g. {"cmd":"switch","desktop":2}, and gets one line back:
 	/// {"ok":true,...} or {"ok":false,"error":"..."}. Desktop numbers are 0-based, window handles are numbers.
 	/// Commands: status, windows, lastwindow, switch, focus, move, movenew, pin, pinapp, gather, new, rename,
-	/// remove, autopin, action (any action of the Actions API, e.g. "MoveWindowForward").
+	/// remove, autopin, showpanel, action (any action of the Actions API, e.g. "MoveWindowForward").
 	/// </summary>
 	public static class ControlServer {
 
@@ -168,6 +168,9 @@ namespace WindowsVirtualDesktopHelper {
 		[DllImport("kernel32.dll", SetLastError = true)]
 		private static extern bool CloseHandle(IntPtr handle);
 
+		[DllImport("user32.dll")]
+		private static extern bool AllowSetForegroundWindow(uint processId);
+
 		#endregion
 
 		private static string _handle(string line) {
@@ -255,6 +258,11 @@ namespace WindowsVirtualDesktopHelper {
 					return null;
 				case "autopin":
 					app.SetAutoPinnedProcess(_str(request, "process"), _bool(request, "on"));
+					return null;
+				case "showpanel":
+					// "launched": the user started the app again, e.g. with its taskbar icon. Clicking that icon while the
+					// panel is open already closed it (it lost the focus) a moment ago: then this click closes it, as a toggle
+					app.ShowTrayFlyout(null, request.ContainsKey("launched") && _bool(request, "launched") ? 2000 : 300);
 					return null;
 				case "action": {
 						var error = app.RunAction(_str(request, "name") ?? "");
@@ -352,7 +360,9 @@ namespace WindowsVirtualDesktopHelper {
 			// Identification: the server may see who we are, but can never act as us (if the pipe were someone else's)
 			using (var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification)) {
 				client.Connect(timeoutMs);
-				_verifyServerIsCurrentUser(client);
+				var serverProcessId = _verifyServerIsCurrentUser(client);
+				// We may have the foreground (e.g. just started by the user): let the app take it, for windows it opens
+				AllowSetForegroundWindow(serverProcessId);
 				var bytes = new UTF8Encoding(false).GetBytes(json.Serialize(request) + "\n");
 				client.Write(bytes, 0, bytes.Length);
 				client.Flush();
@@ -363,8 +373,9 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
-		// Makes sure the process serving the pipe runs as the current user (see the note on pipe squatting above)
-		private static void _verifyServerIsCurrentUser(NamedPipeClientStream client) {
+		// Makes sure the process serving the pipe runs as the current user (see the note on pipe squatting above),
+		// returns its process id
+		private static uint _verifyServerIsCurrentUser(NamedPipeClientStream client) {
 			uint serverProcessId;
 			if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out serverProcessId)) throw new UnauthorizedAccessException("could not check the pipe's server");
 			var process = OpenProcess(0x1000, false, serverProcessId); // PROCESS_QUERY_LIMITED_INFORMATION
@@ -381,6 +392,18 @@ namespace WindowsVirtualDesktopHelper {
 				}
 			} finally {
 				CloseHandle(process);
+			}
+			return serverProcessId;
+		}
+
+		// For a second start of the app: asks the running instance to open its panel. False if it didn't answer.
+		// (Doesn't log: a second instance starting the log file would move the running app's log aside)
+		public static bool ShowPanelOfRunningApp() {
+			try {
+				var response = Send(new Dictionary<string, object> { { "cmd", "showpanel" }, { "launched", true } });
+				return response != null && response.Contains("\"ok\":true");
+			} catch (Exception) {
+				return false;
 			}
 		}
 

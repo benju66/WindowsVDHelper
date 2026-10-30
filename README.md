@@ -35,10 +35,14 @@ This builds `dist\WindowsVirtualDesktopHelper.exe` with just the .NET SDK (no Vi
   - move the last used window to another desktop, or show it on all desktops
   - **Pin windows to all desktops**: a checklist of every open window; click to pin/unpin, the menu stays open
   - options: wrap around, color per desktop, switch along when moving a window, open config/log
-- Hotkeys (defaults, change them in the config):
+- Starting the app again (Start menu, or a pinned taskbar icon) opens the panel of the running app; starting it once more closes it
+- Hotkeys (defaults, change them in Settings > Keyboard shortcuts):
   - `Ctrl + Shift + Win + Right/Left` move the active window to the next/previous desktop
   - `Ctrl + Shift + Win + P` pin/unpin the active window on all desktops
-  - `Alt + 1..9` jump to a desktop, `Alt + ~` back to the previous desktop (off by default, enable in the config)
+  - `Ctrl + Alt + 1..9` jump to a desktop, `Ctrl + Alt + ~` back to the previous desktop
+  - open the panel (off by default, `Ctrl + Alt + Space` when turned on)
+- Mouse wheel: scroll over the tray icons, or anywhere while holding `Win + Alt` (or other keys, in Settings), to switch desktops
+- **Open on a desktop**: new windows of the apps you choose open on their desktop (e.g. every new Outlook window on "Mail"); set it in Settings > Desktops and windows, the panel, or the window menu's "Always open ... on". An app that reuses a window it already has open on another desktop still takes you there
 - Optional switch overlay and permanent status overlay
 - A notification when a hotkey can't be registered because another app uses it
 
@@ -62,7 +66,7 @@ WindowsVirtualDesktopHelper.exe --action MoveWindowForward
 WindowsVirtualDesktopHelper.exe --send "{\"cmd\":\"new\"}"
 ```
 
-Actions: `DesktopForward`, `DesktopBackward`, `PreviousDesktop`, `Desktop1`..`Desktop9`, `MoveWindowForward`, `MoveWindowBackward`, `MoveWindowToDesktop1`..`9`, `MoveWindowToNewDesktop`, `TogglePinWindow`, `TogglePinApp`, `GatherAppWindows`, `NewDesktop`. The protocol (a per-user named pipe, one JSON line per request) is documented in `Source\App\ControlServer.cs`.
+Actions: `DesktopForward`, `DesktopBackward`, `PreviousDesktop`, `Desktop1`..`Desktop9`, `MoveWindowForward`, `MoveWindowBackward`, `MoveWindowToDesktop1`..`9`, `MoveWindowToNewDesktop`, `TogglePinWindow`, `TogglePinApp`, `GatherAppWindows`, `NewDesktop`, `ShowWindowMenu`, `ShowPanel`. The protocol (a per-user named pipe, one JSON line per request) is documented in `Source\App\ControlServer.cs`.
 
 ## Config
 

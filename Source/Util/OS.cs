@@ -92,19 +92,24 @@ namespace WindowsVirtualDesktopHelper.Util {
 		public static System.Collections.Generic.List<IntPtr> GetAppWindows() {
 			var windows = new System.Collections.Generic.List<IntPtr>();
 			EnumWindows((hWnd, lParam) => {
-				if (!IsWindowVisible(hWnd)) return true;
-				if (GetWindowTextLength(hWnd) == 0) return true;
-				var exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
-				var owner = GetWindow(hWnd, GW_OWNER);
-				if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
-				if (owner != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return true;
-				int cloaked;
-				// Cloaked by the app itself (e.g. suspended store app frames) means not really open
-				if (DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked == DWM_CLOAKED_APP) return true;
-				windows.Add(hWnd);
+				if (IsAppWindow(hWnd)) windows.Add(hWnd);
 				return true;
 			}, IntPtr.Zero);
 			return windows;
+		}
+
+		// A top level window the user would see in Alt+Tab (see GetAppWindows)
+		public static bool IsAppWindow(IntPtr hWnd) {
+			if (!IsWindowVisible(hWnd)) return false;
+			if (GetWindowTextLength(hWnd) == 0) return false;
+			var exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
+			var owner = GetWindow(hWnd, GW_OWNER);
+			if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return false;
+			if (owner != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return false;
+			int cloaked;
+			// Cloaked by the app itself (e.g. suspended store app frames) means not really open
+			if (DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked == DWM_CLOAKED_APP) return false;
+			return true;
 		}
 
 		// Process name (without .exe) of the process owning the window, e.g. "Spotify", or "" if unknown.
