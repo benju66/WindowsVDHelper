@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -222,6 +223,11 @@ namespace WindowsVirtualDesktopHelper.Util {
 				var path = WindowIcons.GetIconPath(hwnd);
 				if (path != null) {
 					var key = "file:" + path;
+					// Window icons come and go with the apps: never let them pile up (the bitmaps of menus which are
+					// open stay valid, they are only no longer cached)
+					if (_cache.Count > 300) {
+						foreach (var stale in _cache.Keys.Where(k => k.StartsWith("file:")).ToList()) _cache.TryRemove(stale, out _);
+					}
 					return _cache.GetOrAdd(key, k => {
 						using (var file = Image.FromFile(path)) return new Bitmap(file);
 					});

@@ -110,7 +110,13 @@ namespace WindowsVirtualDesktopHelper {
 			App.Instance.UpdateTrayMouseWheel();
 			App.Instance.UpdateTitleBarMenuHook();
 			try { App.Instance.ApplyAutoPinToAllWindows(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error applying auto pin: " + ex.Message); }
+			try { App.Instance.UpdateNewWindowWatcher(); } catch (Exception ex) { Util.Logging.WriteLine("AppForm: Error watching new windows: " + ex.Message); }
 			App.Instance.NotifyHotKeyConflicts();
+
+			// From now on an exception in an event handler (a click, a timer, a window message) is logged and the app
+			// keeps running, instead of showing WinForms' "unhandled exception" dialog. Not before: a failing startup
+			// still shows the error window
+			Application.ThreadException += (s, e) => Util.Logging.WriteLine("AppForm: Error: unhandled exception: " + e.Exception);
 		}
 
 		// System events we react to instead of polling

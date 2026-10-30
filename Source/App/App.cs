@@ -96,6 +96,13 @@ namespace WindowsVirtualDesktopHelper {
 		#region Virtual Desktop Methods
 
 		public void LoadVDAPI() {
+			// Started at logon before explorer is up? Then wait for it, and give it a moment to set up its virtual
+			// desktop service once the taskbar appears (a failed load can't be retried, see the implementations'
+			// static DesktopManager constructors)
+			if(Util.OS.WaitForShell(60000)) {
+				Util.Logging.WriteLine("App: waited for the shell to start");
+				System.Threading.Thread.Sleep(3000);
+			}
 			App.DetectedVDImplementation = VirtualDesktopAPI.Loader.GetImplementationForOS();
 			this.VDAPI = VirtualDesktopAPI.Loader.LoadImplementationWithFallback(App.DetectedVDImplementation);
 		}
@@ -296,9 +303,15 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// Set while a check for a notification is posted but hasn't run yet: a switch raises several notifications at
+		// once (current desktop changed, desktop switched), and one check covers them all
+		private int _vdNotificationCheckPending = 0;
+
 		private void _onVDNotification(object sender, EventArgs e) {
+			if(System.Threading.Interlocked.Exchange(ref _vdNotificationCheckPending, 1) == 1) return;
 			// We are inside a call from the shell: never call back into it synchronously, post the work instead
-			_postToUI(() => {
+			var posted = _postToUI(() => {
+				_vdNotificationCheckPending = 0; // a notification from now on needs a check of its own
 				try {
 					_checkForDesktopSwitch(true);
 					_checkForDesktopCountChange();
@@ -306,6 +319,7 @@ namespace WindowsVirtualDesktopHelper {
 					Util.Logging.WriteLine("App: Error: handling shell notification: " + ex.Message);
 				}
 			});
+			if(!posted) _vdNotificationCheckPending = 0;
 		}
 
 		// Called when explorer.exe (re)starts, see AppForm.WndProc (TaskbarCreated)
@@ -326,13 +340,16 @@ namespace WindowsVirtualDesktopHelper {
 			UIUpdate();
 		}
 
-		private void _postToUI(Action action) {
+		// Returns false if the action could not be posted (and will never run)
+		private bool _postToUI(Action action) {
 			try {
-				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return;
+				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return false;
 				this.AppForm.BeginInvoke(action);
+				return true;
 			} catch(Exception e) {
 				// e.g. the form is being closed while the app exits
 				Util.Logging.WriteLine("App: Error: could not post to UI thread: " + e.Message);
+				return false;
 			}
 		}
 
@@ -411,7 +428,8 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
-		public void SwitchToDesktop(int number) {
+		// Returns false if the switch failed (e.g. there is no such desktop), so callers like the control pipe can say so
+		public bool SwitchToDesktop(int number) {
 			// Explicitly store the last focused window
 			try {
 				_storeLastWinFocused();
@@ -421,9 +439,10 @@ namespace WindowsVirtualDesktopHelper {
 			// We try the virtual desktop implementation API
 			try {
 				VDAPI.SwitchToDesktop(number);
+				return true;
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: SwitchToDesktop (VDAPI.SwitchToDesktop(number)): " + e.Message);
-				return;
+				return false;
 			}
 		}
 
@@ -628,6 +647,11 @@ namespace WindowsVirtualDesktopHelper {
 				// If the desktop number can't be determined we skip, instead of filing this window under desktop 0
 				int displayNumber;
 				if(!_tryGetVDDisplayNumber(out displayNumber)) return;
+				// During a switch the current desktop changes before Windows activates a window there, so for a moment
+				// the previous desktop's window is still in front: it must not be filed under the new desktop (restoring
+				// it later would switch straight back to its desktop). Checked after reading the number, so a switch in
+				// between can't slip through either
+				if(Util.OS.IsWindowOnCurrentDesktop(hWnd) != true) return;
 				lock(_focusLock) {
 					VDDToLastFocusedWin[displayNumber] = hWnd;
 				}
@@ -642,9 +666,17 @@ namespace WindowsVirtualDesktopHelper {
 			lock(_focusLock) {
 				if(!VDDToLastFocusedWin.TryGetValue(displayNumber, out lastWindowHandle)) return;
 			}
-			if(Util.OS.IsWindow(lastWindowHandle)) {
-				Util.OS.SetForegroundWindow(lastWindowHandle);
+			if(!Util.OS.IsWindow(lastWindowHandle)) return;
+			// Bringing a window to the front switches to its desktop, so only if it is (still) on this one: it may
+			// have been moved since. Otherwise the desktop jumped straight back after a switch
+			if(Util.OS.IsWindowOnCurrentDesktop(lastWindowHandle) != true) {
+				Util.Logging.WriteLine($"App: not restoring the focus to \"{Util.OS.GetHandleWndName(lastWindowHandle)}\", it is not on desktop {displayNumber + 1}");
+				lock(_focusLock) {
+					VDDToLastFocusedWin.Remove(displayNumber);
+				}
+				return;
 			}
+			Util.OS.SetForegroundWindow(lastWindowHandle);
 		}
 
 		private bool _tryGetVDDisplayNumber(out int displayNumber) {
@@ -692,9 +724,11 @@ namespace WindowsVirtualDesktopHelper {
 			if(string.IsNullOrWhiteSpace(Util.OS.GetHandleWndName(hwnd))) return false;
 			uint pid;
 			Util.OS.GetWindowThreadProcessId(hwnd, out pid);
-			if(pid == (uint)Process.GetCurrentProcess().Id) return false; // our own overlays/forms
+			if(pid == _ownProcessId) return false; // our own overlays/forms
 			return true;
 		}
+
+		private static readonly uint _ownProcessId = (uint)Process.GetCurrentProcess().Id;
 
 		// The window the user is working in: the foreground window (for hotkeys), or the last app window
 		// that had the focus (for the tray menu, where the taskbar has the focus)
@@ -718,21 +752,22 @@ namespace WindowsVirtualDesktopHelper {
 			MoveWindowToDesktop(hwnd, target);
 		}
 
-		public void MoveWindowToDesktop(IntPtr hwnd, int index) {
-			MoveWindowToDesktop(hwnd, index, Settings.GetBool("feature.moveWindow.follow"));
+		public bool MoveWindowToDesktop(IntPtr hwnd, int index) {
+			return MoveWindowToDesktop(hwnd, index, Settings.GetBool("feature.moveWindow.follow"));
 		}
 
-		public void MoveWindowToDesktop(IntPtr hwnd, int index, bool follow) {
+		// Returns false if the window was not moved (no window, no such desktop, or the API failed)
+		public bool MoveWindowToDesktop(IntPtr hwnd, int index, bool follow) {
 			var ext = VDAPIExtended;
-			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return; }
-			if(hwnd == IntPtr.Zero) return;
-			if(index < 0 || index >= this.GetVDDisplayCount()) return;
+			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return false; }
+			if(hwnd == IntPtr.Zero) return false;
+			if(index < 0 || index >= this.GetVDDisplayCount()) return false;
 			try {
 				ext.MoveWindowToDesktop(hwnd, index);
 				Util.Logging.WriteLine($"App: moved window \"{Util.OS.GetHandleWndName(hwnd)}\" to desktop {index + 1}");
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: could not move window: " + e.Message);
-				return;
+				return false;
 			}
 			if(follow) {
 				SwitchToDesktop(index);
@@ -743,6 +778,7 @@ namespace WindowsVirtualDesktopHelper {
 				timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); if(Util.OS.IsWindow(hwnd)) Util.OS.SetForegroundWindow(hwnd); };
 				timer.Start();
 			}
+			return true;
 		}
 
 		// Switches to the window's desktop (if needed) and brings the window to the front
@@ -832,7 +868,12 @@ namespace WindowsVirtualDesktopHelper {
 		}
 
 		public bool IsAutoPinned(string processName) {
-			return _getAutoPinApps().Any(a => string.Equals(a, processName, StringComparison.OrdinalIgnoreCase) || string.Equals(a + ".exe", processName, StringComparison.OrdinalIgnoreCase));
+			return _getAutoPinApps().Any(a => _isProcess(a, processName));
+		}
+
+		// A process name from the config ("Spotify" or "Spotify.exe") is the given process name
+		private static bool _isProcess(string configured, string processName) {
+			return string.Equals(configured, processName, StringComparison.OrdinalIgnoreCase) || string.Equals(configured, processName + ".exe", StringComparison.OrdinalIgnoreCase) || string.Equals(configured + ".exe", processName, StringComparison.OrdinalIgnoreCase);
 		}
 
 		public void SetAutoPinned(IntPtr hwnd, bool autoPin) {
@@ -885,13 +926,116 @@ namespace WindowsVirtualDesktopHelper {
 			foreach(var window in Util.OS.GetAppWindows()) _applyAutoPin(window);
 		}
 
-		// ---- Mouse wheel over the tray icons
+		// ---- Open on a desktop: new windows of the apps in feature.appDesktops.rules ("explorer = Work; Outlook = Mail")
+		// are moved to that desktop when they open. Only new windows: an app which shows a window it already has (e.g. a
+		// single window app activated from the taskbar) still makes Windows switch to the desktop of that window
+
+		// (process name, desktop name or number) pairs, in the order of the config
+		public List<KeyValuePair<string, string>> GetAppDesktopRules() {
+			var rules = new List<KeyValuePair<string, string>>();
+			foreach(var entry in (Settings.GetString("feature.appDesktops.rules") ?? "").Split(';')) {
+				var parts = entry.Split(new[] { '=' }, 2);
+				if(parts.Length != 2) continue;
+				var process = parts[0].Trim();
+				var desktop = parts[1].Trim();
+				if(process == "" || desktop == "" || rules.Any(r => _isProcess(r.Key, process))) continue;
+				rules.Add(new KeyValuePair<string, string>(process, desktop));
+			}
+			return rules;
+		}
+
+		// The desktop (name or number) new windows of the app open on, or null
+		public string GetAppDesktopRule(string processName) {
+			if(string.IsNullOrEmpty(processName)) return null;
+			foreach(var rule in GetAppDesktopRules()) {
+				if(_isProcess(rule.Key, processName)) return rule.Value;
+			}
+			return null;
+		}
+
+		// Sets the desktop (by name) new windows of the app open on; desktopName = null removes the rule
+		public void SetAppDesktopRule(string processName, string desktopName) {
+			if(string.IsNullOrWhiteSpace(processName)) return;
+			var rules = GetAppDesktopRules().Where(r => !_isProcess(r.Key, processName)).ToList();
+			if(!string.IsNullOrWhiteSpace(desktopName)) rules.Add(new KeyValuePair<string, string>(processName, desktopName.Trim()));
+			Settings.SetString("feature.appDesktops.rules", string.Join("; ", rules.Select(r => r.Key + " = " + r.Value)));
+			try { Settings.SaveConfig(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: saving config: " + e.Message); }
+			UpdateNewWindowWatcher();
+		}
+
+		// The index of the desktop of a rule: by name, or (if no desktop has that name) by number. -1 if there is none
+		public int GetRuleDesktopIndex(string desktop) {
+			var ext = VDAPIExtended;
+			if(ext == null || string.IsNullOrWhiteSpace(desktop)) return -1;
+			var names = ext.GetDesktopNames();
+			var index = names.FindIndex(n => string.Equals(n.Trim(), desktop.Trim(), StringComparison.OrdinalIgnoreCase));
+			if(index >= 0) return index;
+			int number;
+			if(int.TryParse(desktop.Trim(), out number) && number >= 1 && number <= names.Count) return number - 1;
+			return -1;
+		}
+
+		private Util.NewWindowWatcher _newWindowWatcher = null;
+
+		// Watches for new windows only while there are rules (the window events of the whole system are many)
+		public void UpdateNewWindowWatcher() {
+			var enabled = VDAPIExtended != null && GetAppDesktopRules().Count > 0;
+			if(enabled && _newWindowWatcher == null) {
+				_newWindowWatcher = new Util.NewWindowWatcher();
+				_newWindowWatcher.Shown += _onNewWindowShown;
+				if(_newWindowWatcher.Start()) Util.Logging.WriteLine("App: new windows of some apps open on their desktop");
+				else Util.Logging.WriteLine("App: Error: could not watch for new windows");
+			} else if(!enabled && _newWindowWatcher != null) {
+				_newWindowWatcher.Dispose();
+				_newWindowWatcher = null;
+			}
+		}
+
+		private void _onNewWindowShown(IntPtr hwnd) {
+			var desktop = GetAppDesktopRule(Util.OS.GetWindowProcessName(hwnd));
+			if(desktop != null) _placeNewWindow(hwnd, desktop, Environment.TickCount);
+		}
+
+		// A window which was just shown is often not ready yet (no title, not known to the desktop API): retried for a few
+		// seconds. Windows which never become app windows (dialogs, popups, ...) stay where they are
+		private void _placeNewWindow(IntPtr hwnd, string desktop, int startTick) {
+			var ext = VDAPIExtended;
+			if(ext == null || !Util.OS.IsWindow(hwnd)) return;
+			var current = Util.OS.IsAppWindow(hwnd) ? ext.GetWindowDesktop(hwnd) : -1; // -1 also when on all desktops
+			if(current < 0) {
+				if(unchecked(Environment.TickCount - startTick) > 3000) return;
+				var timer = new System.Windows.Forms.Timer { Interval = 150 };
+				timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); _placeNewWindow(hwnd, desktop, startTick); };
+				timer.Start();
+				return;
+			}
+			var target = GetRuleDesktopIndex(desktop);
+			if(target < 0) {
+				Util.Logging.WriteLine($"App: no desktop \"{desktop}\" for the new window \"{Util.OS.GetHandleWndName(hwnd)}\"");
+				return;
+			}
+			if(target == current) return;
+			// Opened by the user (it has the focus): go along, otherwise it would just disappear. A window which opened
+			// in the background is only moved
+			var follow = Util.OS.GetForegroundWindow() == hwnd;
+			Util.Logging.WriteLine($"App: new window of {Util.OS.GetWindowProcessName(hwnd)} opens on desktop {target + 1}");
+			MoveWindowToDesktop(hwnd, target, follow);
+		}
+
+		// ---- Mouse wheel over the tray icons, or anywhere with modifier keys held (one hook for both)
 
 		private Util.TrayMouseWheel _trayMouseWheel = null;
 		private int _lastWheelSwitchTick = 0;
 
 		public void UpdateTrayMouseWheel() {
-			var enabled = Settings.GetBool("feature.mouseWheelOnTrayIcons");
+			var overIcons = Settings.GetBool("feature.mouseWheelOnTrayIcons");
+			var modifiers = Settings.GetBool("feature.mouseWheelWithModifiers") ? Util.TrayMouseWheel.ParseModifiers(Settings.GetString("feature.mouseWheelWithModifiers.keys")) : 0;
+			if(Settings.GetBool("feature.mouseWheelWithModifiers") && modifiers == 0) Util.Logging.WriteLine("App: Error: feature.mouseWheelWithModifiers.keys must be modifier keys, like \"Win + Alt\"");
+			var enabled = overIcons || modifiers != 0;
+			if(_trayMouseWheel != null) {
+				_trayMouseWheel.OverIcons = overIcons;
+				_trayMouseWheel.Modifiers = modifiers;
+			}
 			if(enabled && _trayMouseWheel == null) {
 				_trayMouseWheel = new Util.TrayMouseWheel(this.AppForm, this.AppForm.notifyIconNumber, this.AppForm.notifyIconName, this.AppForm.notifyIconPrev, this.AppForm.notifyIconNext);
 				_trayMouseWheel.Scrolled += direction => {
@@ -901,7 +1045,9 @@ namespace WindowsVirtualDesktopHelper {
 					if(direction > 0) SwitchDesktopForward();
 					else SwitchDesktopBackward();
 				};
-				if(_trayMouseWheel.Start()) Util.Logging.WriteLine("App: mouse wheel over the tray icons switches desktops");
+				_trayMouseWheel.OverIcons = overIcons;
+				_trayMouseWheel.Modifiers = modifiers;
+				if(_trayMouseWheel.Start()) Util.Logging.WriteLine("App: mouse wheel switches desktops (" + (overIcons ? "over the tray icons" : "") + (overIcons && modifiers != 0 ? ", " : "") + (modifiers != 0 ? "anywhere with " + Settings.GetString("feature.mouseWheelWithModifiers.keys") : "") + ")");
 				else Util.Logging.WriteLine("App: Error: could not install the mouse hook for the tray mouse wheel");
 			} else if(!enabled && _trayMouseWheel != null) {
 				_trayMouseWheel.Dispose();
@@ -1098,11 +1244,31 @@ namespace WindowsVirtualDesktopHelper {
 				var autoPinItem = new ToolStripMenuItem($"Always pin {appName} to all desktops") { Checked = IsAutoPinned(processName), Image = Util.MenuIcons.Icon(Util.MenuIcons.Pin) };
 				autoPinItem.Click += (s, e) => SetAutoPinned(hwnd, !IsAutoPinned(processName));
 				items.Add(autoPinItem);
+				items.Add(_openOnDesktopMenu(appName, processName, desktopNames));
 				var gatherItem = new ToolStripMenuItem($"Bring all {appName} windows here") { ShortcutKeyDisplayString = GetHotKeyForAction("GatherAppWindows"), Image = Util.MenuIcons.Icon(Util.MenuIcons.Gather) };
 				gatherItem.Click += (s, e) => GatherAppWindows(hwnd);
 				items.Add(gatherItem);
 			}
 			return items;
+		}
+
+		// "Always open <app> on": the desktop the app's new windows open on (see GetAppDesktopRules)
+		private ToolStripMenuItem _openOnDesktopMenu(string appName, string processName, List<string> desktopNames) {
+			var rule = GetAppDesktopRule(processName);
+			var ruleIndex = GetRuleDesktopIndex(rule);
+			var menu = new ToolStripMenuItem($"Always open {appName} on") { Image = Util.MenuIcons.Icon(Util.MenuIcons.Desktop) };
+			for(var i = 0; i < desktopNames.Count; i++) {
+				var name = desktopNames[i];
+				var item = new ToolStripMenuItem($"{i + 1}    {name}") { Checked = rule != null && i == ruleIndex };
+				item.Click += (s, e) => SetAppDesktopRule(processName, name);
+				menu.DropDownItems.Add(item);
+			}
+			if(rule != null && ruleIndex < 0) menu.DropDownItems.Add(new ToolStripMenuItem($"\"{rule}\" (no such desktop now)") { Checked = true, Enabled = false });
+			menu.DropDownItems.Add(new ToolStripSeparator());
+			var anyItem = new ToolStripMenuItem("Any desktop (where it is opened)") { Checked = rule == null };
+			anyItem.Click += (s, e) => SetAppDesktopRule(processName, null);
+			menu.DropDownItems.Add(anyItem);
+			return menu;
 		}
 
 		// The window menu: the window's desktop actions in a menu at the mouse cursor. Opened with a hotkey
@@ -1180,14 +1346,15 @@ namespace WindowsVirtualDesktopHelper {
 			get { return Settings.GetBool("feature.trayFlyout"); }
 		}
 
-		// Opens the tray panel next to the tray icon; a second click on the icon closes it again
-		public void ShowTrayFlyout(NotifyIcon from) {
+		// Opens the tray panel next to the tray icon; a second click on the icon closes it again.
+		// from = null: next to the desktop number, or at the mouse cursor if it isn't shown
+		public void ShowTrayFlyout(NotifyIcon from, int reopenGraceMs = 300) {
 			if(_trayFlyout != null && !_trayFlyout.IsDisposed) {
 				_trayFlyout.Close();
 				return;
 			}
 			// The click on the icon already closed the open panel (it lost the focus): don't re-open it
-			if(unchecked(Environment.TickCount - _trayFlyoutClosedTick) < 300) return;
+			if(unchecked(Environment.TickCount - _trayFlyoutClosedTick) < reopenGraceMs) return;
 			try {
 				var anchor = Util.TrayMouseWheel.GetIconRect(from ?? this.AppForm.notifyIconNumber);
 				var flyout = new TrayFlyout(GetActiveUserWindow(false), anchor);
@@ -1349,6 +1516,7 @@ namespace WindowsVirtualDesktopHelper {
 			try { UpdateTrayMouseWheel(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: tray mouse wheel: " + e.Message); }
 			try { UpdateTitleBarMenuHook(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: window menu hook: " + e.Message); }
 			try { ApplyAutoPinToAllWindows(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: auto pin: " + e.Message); }
+			try { UpdateNewWindowWatcher(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: new window watcher: " + e.Message); }
 			try { if(Settings.GetBool("feature.useShellNotifications") != _vdNotificationsActive) StartVDNotifications(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: notifications: " + e.Message); }
 			try { if(this.SettingsForm != null && !this.SettingsForm.IsDisposed) this.SettingsForm.ReloadFromSettings(); } catch(Exception e) { Util.Logging.WriteLine("App: Error: settings window: " + e.Message); }
 		}
@@ -1369,6 +1537,7 @@ namespace WindowsVirtualDesktopHelper {
 			// - TogglePinWindow, TogglePinApp, ShowWindowMenu (Windows 11 24H2+)
 			// - MoveWindowToNewDesktop, GatherAppWindows (Windows 11 24H2+)
 			// - NewDesktop (Windows 11 24H2+)
+			// - ShowPanel (opens the tray panel, or closes it if it is open)
 			try {
 
 				action = action.Trim().ToLower();
@@ -1390,7 +1559,7 @@ namespace WindowsVirtualDesktopHelper {
 				} else if(action.StartsWith("movewindowtodesktop")) {
 					int target;
 					if(!int.TryParse(action.Replace("movewindowtodesktop", ""), out target)) throw new Exception("invalid desktop number");
-					this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1);
+					if(!this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1)) throw new Exception("the window could not be moved");
 					return null;
 				} else if(action == "showwindowmenu") {
 					this.ShowWindowMenu(this.GetActiveUserWindow(true));
@@ -1410,10 +1579,13 @@ namespace WindowsVirtualDesktopHelper {
 				} else if(action == "newdesktop") {
 					this.CreateDesktopAndSwitch();
 					return null;
+				} else if(action == "showpanel") {
+					this.ShowTrayFlyout(null);
+					return null;
 				} else if(action.StartsWith("desktop")) {
 					var desktopNumber = 0;
 					if(int.TryParse(action.Replace("desktop", ""), out desktopNumber)) {
-						this.SwitchToDesktop(desktopNumber - 1);
+						if(!this.SwitchToDesktop(desktopNumber - 1)) throw new Exception("could not switch to desktop " + desktopNumber);
 						return null;
 					} else {
 						throw new Exception("invalid desktop number");
@@ -1520,6 +1692,7 @@ namespace WindowsVirtualDesktopHelper {
 					hotkeys.Add($"{hotKey} = DesktopBackward");
 				}
 			}
+			_addFeatureHotKey(hotkeys, "feature.useHotKeyToShowPanel", "ShowPanel");
 
 			// Window/desktop management hotkeys, only when the Windows version supports it (otherwise
 			// we would take the key combinations away from other apps for nothing)

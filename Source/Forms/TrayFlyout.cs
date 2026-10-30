@@ -335,6 +335,33 @@ namespace WindowsVirtualDesktopHelper {
 			var link = new FlyoutRow(_scale) { Width = Inner, Height = S(32), Title = total > 4 ? $"+ {total - 4} more, pin other windows..." : "Pin windows...", TitleColor = FlyoutColors.Accent, Margin = new Padding(0) };
 			link.RowClick += () => { _view = View.PinList; Render(); };
 			flow.Controls.Add(link);
+
+			// Apps whose new windows open on a given desktop (all of them are edited in the settings)
+			var rules = App.Instance.GetAppDesktopRules();
+			var windowHasRule = window != null && App.Instance.GetAppDesktopRule(window.Process) != null;
+			if (rules.Count == 0 && window == null) return;
+			var rulesLabel = SectionLabel("Open on a desktop");
+			rulesLabel.Margin = new Padding(S(2), S(10), 0, S(6));
+			flow.Controls.Add(rulesLabel);
+			shown = 0;
+			foreach (var rule in rules) {
+				if (shown++ >= 4) break;
+				var process = rule.Key;
+				var appWindow = _windows.FirstOrDefault(w => string.Equals(w.Process, process, StringComparison.OrdinalIgnoreCase));
+				var index = App.Instance.GetRuleDesktopIndex(rule.Value);
+				var title = (appWindow?.AppName ?? process) + "  →  " + (index >= 0 ? DesktopName(index) : rule.Value + " (no such desktop)");
+				flow.Controls.Add(PinnedRow(appWindow != null ? Util.MenuIcons.ForWindow(appWindow.Hwnd) : null, title, "New windows of this app open on that desktop. Click the × to stop that", () => { App.Instance.SetAppDesktopRule(process, null); Refresh(); }, ""));
+			}
+			if (window != null && !windowHasRule) {
+				var add = new FlyoutRow(_scale) { Width = Inner, Height = S(32), Title = $"Always open {window.AppName} on {DesktopName(_current)}", TitleColor = FlyoutColors.Accent, Margin = new Padding(0) };
+				_toolTip.SetToolTip(add, "New windows of the app open on this desktop, wherever you open them");
+				add.RowClick += () => { App.Instance.SetAppDesktopRule(window.Process, DesktopName(_current)); Refresh(); };
+				flow.Controls.Add(add);
+			} else if (rules.Count > 4) {
+				var more = new FlyoutRow(_scale) { Width = Inner, Height = S(32), Title = $"+ {rules.Count - 4} more in the settings...", TitleColor = FlyoutColors.Accent, Margin = new Padding(0) };
+				more.RowClick += () => CloseThen(() => App.Instance.ShowSettings(Forms.SettingsWindow.PageDesktops));
+				flow.Controls.Add(more);
+			}
 		}
 
 		private IEnumerable<App.WindowEntry> SearchResults() {
@@ -405,8 +432,9 @@ namespace WindowsVirtualDesktopHelper {
 			return list;
 		}
 
-		private Control PinnedRow(Image icon, string title, string tip, Action unpin) {
+		private Control PinnedRow(Image icon, string title, string tip, Action unpin, string trailingGlyph = null) {
 			var row = new FlyoutRow(_scale) { Width = Inner, Height = S(36), Icon = icon, Title = title, TrailingGlyph = "", Margin = new Padding(0) };
+			if (trailingGlyph != null) row.TrailingGlyph = trailingGlyph;
 			_toolTip.SetToolTip(row, tip);
 			row.TrailingClick += () => {
 				try { unpin(); } catch (Exception e) { Util.Logging.WriteLine("TrayFlyout: Error: unpin: " + e.Message); }

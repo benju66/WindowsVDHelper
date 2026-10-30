@@ -114,6 +114,8 @@
     <Compile Include="Forms\TrayFlyout.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Util\HookThread.cs" />
+    <Compile Include="Util\NewWindowWatcher.cs" />
     <Compile Include="Util\TitleBarMenuHook.cs" />
     <Compile Include="Util\TrayMouseWheel.cs" />
     <Compile Include="VirtualDesktopAPI\Notifications.cs" />

@@ -18,10 +18,27 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 		private static readonly string _dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WindowsVirtualDesktopHelper", "icons");
 		private static readonly ConcurrentDictionary<string, string> _cache = new ConcurrentDictionary<string, string>(); // key -> png path ("" = no icon)
-		private static bool _cleanedUp = false;
+		private static int _savesUntilCleanup = 0; // the folder is cleaned up at the first save and then every CleanupEverySaves saves
+		private const int CleanupEverySaves = 200;
+		private const int KeepFiles = 300;
+
+		// The answer per window, for a while: finding the icon handle asks the window itself (up to three messages,
+		// which a busy app answers slowly), and window lists ask for every window every few seconds
+		private static readonly ConcurrentDictionary<IntPtr, Tuple<int, string>> _byWindow = new ConcurrentDictionary<IntPtr, Tuple<int, string>>();
+		private const int ByWindowTtlMs = 30000;
+		private const int MaxEntries = 1000;
 
 		// The PNG path of the window's icon, or null if it has none
 		public static string GetIconPath(IntPtr hwnd) {
+			Tuple<int, string> known;
+			if (_byWindow.TryGetValue(hwnd, out known) && unchecked(Environment.TickCount - known.Item1) < ByWindowTtlMs) return known.Item2;
+			if (_byWindow.Count > MaxEntries) _byWindow.Clear();
+			var path = _findIconPath(hwnd);
+			_byWindow[hwnd] = Tuple.Create(Environment.TickCount, path);
+			return path;
+		}
+
+		private static string _findIconPath(IntPtr hwnd) {
 			try {
 				var process = OS.GetWindowProcessName(hwnd);
 				var hIcon = _getWindowIcon(hwnd);
@@ -49,12 +66,16 @@ namespace WindowsVirtualDesktopHelper.Util {
 		private static string _save(string key, Func<Bitmap> render) {
 			try {
 				Directory.CreateDirectory(_dir);
-				if (!_cleanedUp) {
-					_cleanedUp = true;
-					// Icon handles change when apps restart, so old files pile up: keep the folder small
-					foreach (var old in new DirectoryInfo(_dir).GetFiles("*.png").OrderByDescending(f => f.LastWriteTimeUtc).Skip(300)) {
+				if (System.Threading.Interlocked.Decrement(ref _savesUntilCleanup) < 0) {
+					_savesUntilCleanup = CleanupEverySaves;
+					// Icon handles change when apps restart (and some apps change their icon for badges), so old files
+					// pile up: keep the folder small, but never delete a file which is still handed out
+					var inUse = new System.Collections.Generic.HashSet<string>(_cache.Values, StringComparer.OrdinalIgnoreCase);
+					foreach (var old in new DirectoryInfo(_dir).GetFiles("*.png").OrderByDescending(f => f.LastWriteTimeUtc).Skip(KeepFiles)) {
+						if (inUse.Contains(old.FullName)) continue;
 						try { old.Delete(); } catch (IOException) { }
 					}
+					if (_cache.Count > MaxEntries) _cache.Clear(); // the files of the entries still in use are kept, so they are found again
 				}
 				var file = Path.Combine(_dir, _safeFileName(key) + ".png");
 				if (!File.Exists(file)) {

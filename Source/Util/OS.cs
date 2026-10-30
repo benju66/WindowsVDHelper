@@ -92,24 +92,31 @@ namespace WindowsVirtualDesktopHelper.Util {
 		public static System.Collections.Generic.List<IntPtr> GetAppWindows() {
 			var windows = new System.Collections.Generic.List<IntPtr>();
 			EnumWindows((hWnd, lParam) => {
-				if (!IsWindowVisible(hWnd)) return true;
-				if (GetWindowTextLength(hWnd) == 0) return true;
-				var exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
-				var owner = GetWindow(hWnd, GW_OWNER);
-				if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
-				if (owner != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return true;
-				int cloaked;
-				// Cloaked by the app itself (e.g. suspended store app frames) means not really open
-				if (DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked == DWM_CLOAKED_APP) return true;
-				windows.Add(hWnd);
+				if (IsAppWindow(hWnd)) windows.Add(hWnd);
 				return true;
 			}, IntPtr.Zero);
 			return windows;
 		}
 
+		// A top level window the user would see in Alt+Tab (see GetAppWindows)
+		public static bool IsAppWindow(IntPtr hWnd) {
+			if (!IsWindowVisible(hWnd)) return false;
+			if (GetWindowTextLength(hWnd) == 0) return false;
+			var exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
+			var owner = GetWindow(hWnd, GW_OWNER);
+			if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return false;
+			if (owner != IntPtr.Zero && (exStyle & WS_EX_APPWINDOW) == 0) return false;
+			int cloaked;
+			// Cloaked by the app itself (e.g. suspended store app frames) means not really open
+			if (DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked == DWM_CLOAKED_APP) return false;
+			return true;
+		}
+
 		// Process name (without .exe) of the process owning the window, e.g. "Spotify", or "" if unknown.
-		// Cached per process id, as this is called for every foreground change (auto pin).
-		private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>> _processInfoCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, Tuple<string, string>>();
+		// Cached per process, as this is called for every foreground change (auto pin).
+		// Note: the caches are keyed by the process id AND its start time: Windows reuses the ids of ended processes,
+		// so with the id alone a new process could be taken for an old one (and e.g. be auto pinned as that app)
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<Tuple<uint, long>, Tuple<string, string>> _processInfoCache = new System.Collections.Concurrent.ConcurrentDictionary<Tuple<uint, long>, Tuple<string, string>>();
 
 		[DllImport("kernel32.dll", SetLastError = true)]
 		private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
@@ -120,16 +127,42 @@ namespace WindowsVirtualDesktopHelper.Util {
 		[DllImport("kernel32.dll", SetLastError = true)]
 		private static extern bool CloseHandle(IntPtr handle);
 
-		private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, string> _processPathCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, string>();
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool GetProcessTimes(IntPtr hProcess, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
+
+		private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+		// Ended processes stay in the caches, so they are emptied now and then
+		private const int MaxProcessCacheEntries = 1000;
+
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<Tuple<uint, long>, string> _processPathCache = new System.Collections.Concurrent.ConcurrentDictionary<Tuple<uint, long>, string>();
+
+		// The cache key of the process owning the window (its id and start time), or null if the window has no process
+		private static Tuple<uint, long> _getProcessKey(IntPtr hWnd) {
+			uint pid;
+			GetWindowThreadProcessId(hWnd, out pid);
+			if (pid == 0) return null;
+			long created = 0;
+			var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+			if (handle != IntPtr.Zero) {
+				try {
+					long exited, kernel, user;
+					if (!GetProcessTimes(handle, out created, out exited, out kernel, out user)) created = 0;
+				} finally {
+					CloseHandle(handle);
+				}
+			}
+			return Tuple.Create(pid, created);
+		}
 
 		// Full path of the exe of the process owning the window, or null. Works for elevated processes too
 		// (PROCESS_QUERY_LIMITED_INFORMATION), unlike Process.MainModule
 		public static string GetWindowProcessPath(IntPtr hWnd) {
-			uint pid;
-			GetWindowThreadProcessId(hWnd, out pid);
-			if (pid == 0) return null;
-			return _processPathCache.GetOrAdd(pid, id => {
-				var handle = OpenProcess(0x1000, false, id); // PROCESS_QUERY_LIMITED_INFORMATION
+			var key = _getProcessKey(hWnd);
+			if (key == null) return null;
+			if (_processPathCache.Count > MaxProcessCacheEntries) _processPathCache.Clear();
+			return _processPathCache.GetOrAdd(key, k => {
+				var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, k.Item1);
 				if (handle == IntPtr.Zero) return null;
 				try {
 					var sb = new StringBuilder(1024);
@@ -152,12 +185,12 @@ namespace WindowsVirtualDesktopHelper.Util {
 		}
 
 		private static Tuple<string, string> _getWindowProcessInfo(IntPtr hWnd) {
-			uint pid;
-			GetWindowThreadProcessId(hWnd, out pid);
-			if (pid == 0) return Tuple.Create("", "");
-			return _processInfoCache.GetOrAdd(pid, id => {
+			var key = _getProcessKey(hWnd);
+			if (key == null) return Tuple.Create("", "");
+			if (_processInfoCache.Count > MaxProcessCacheEntries) _processInfoCache.Clear();
+			return _processInfoCache.GetOrAdd(key, k => {
 				try {
-					using (var process = System.Diagnostics.Process.GetProcessById((int)id)) {
+					using (var process = System.Diagnostics.Process.GetProcessById((int)k.Item1)) {
 						var name = process.ProcessName;
 						string description = null;
 						try { description = process.MainModule.FileVersionInfo.FileDescription; } catch (Exception) { /* e.g. elevated process */ }
@@ -167,6 +200,55 @@ namespace WindowsVirtualDesktopHelper.Util {
 					return Tuple.Create("", "");
 				}
 			});
+		}
+
+		#endregion
+
+		#region Shell
+
+		// Waits until explorer's taskbar exists: at logon the app can start before the shell, and the virtual desktop API
+		// then fails to load. Returns true if it had to wait, false if the shell was already there (or never came)
+		public static bool WaitForShell(int timeoutMs) {
+			if (FindWindowA("Shell_TrayWnd", null) != IntPtr.Zero) return false;
+			var start = Environment.TickCount;
+			while (FindWindowA("Shell_TrayWnd", null) == IntPtr.Zero) {
+				if (unchecked(Environment.TickCount - start) > timeoutMs) return false;
+				System.Threading.Thread.Sleep(500);
+			}
+			return true;
+		}
+
+		#endregion
+
+		#region Desktop of a Window
+
+		// The documented IVirtualDesktopManager (shobjidl.h), which is the same on all Windows 10/11 builds (unlike the
+		// internal API in VirtualDesktopAPI). One instance per thread, so a call never has to wait for another thread.
+		[ComImport]
+		[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+		[Guid("A5CD92FF-29BE-454C-8D04-D82879FB3F1B")]
+		private interface IPublicVirtualDesktopManager {
+			[return: MarshalAs(UnmanagedType.Bool)]
+			bool IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow);
+			Guid GetWindowDesktopId(IntPtr topLevelWindow);
+			void MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
+		}
+
+		private static readonly Guid CLSID_VirtualDesktopManager = new Guid("AA509086-5CA9-4C25-8F95-589D3C07B48A");
+
+		[ThreadStatic]
+		private static IPublicVirtualDesktopManager _publicVDManager;
+
+		// True if the window is on the current desktop (or pinned to all desktops), null if unknown (e.g. the window is gone)
+		public static bool? IsWindowOnCurrentDesktop(IntPtr hWnd) {
+			if (hWnd == IntPtr.Zero) return null;
+			try {
+				if (_publicVDManager == null) _publicVDManager = (IPublicVirtualDesktopManager)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_VirtualDesktopManager));
+				return _publicVDManager.IsWindowOnCurrentVirtualDesktop(hWnd);
+			} catch (Exception) {
+				_publicVDManager = null; // may be stale after an explorer restart: re-created on the next call
+				return null;
+			}
 		}
 
 		#endregion

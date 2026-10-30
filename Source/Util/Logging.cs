@@ -24,10 +24,14 @@ namespace WindowsVirtualDesktopHelper.Util {
 			}
 		}
 
-		// The log is also written to %APPDATA%\WindowsVirtualDesktopHelper\WindowsVirtualDesktopHelper.log (re-created
-		// on each start, capped in size), so problems can be diagnosed after the fact
+		// The log is also written to %APPDATA%\WindowsVirtualDesktopHelper\WindowsVirtualDesktopHelper.log, so problems can be
+		// diagnosed after the fact. At each start the log of the previous run is kept as WindowsVirtualDesktopHelper.previous.log
+		// (so a restart after a crash doesn't erase what led to it), and a log which reaches the size cap is moved there too.
+		// The file stays open (instead of being opened for every line), shared, so it can be read while the app runs.
 		private const long MaxFileBytes = 2 * 1024 * 1024;
 		private static string _filePath = null;
+		private static string _previousFilePath = null;
+		private static System.IO.StreamWriter _writer = null;
 		private static bool _fileFailed = false;
 
 		private static void _writeToFile(string line) {
@@ -37,13 +41,32 @@ namespace WindowsVirtualDesktopHelper.Util {
 					var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WindowsVirtualDesktopHelper");
 					System.IO.Directory.CreateDirectory(dir);
 					_filePath = System.IO.Path.Combine(dir, "WindowsVirtualDesktopHelper.log");
-					System.IO.File.WriteAllText(_filePath, "");
+					_previousFilePath = System.IO.Path.Combine(dir, "WindowsVirtualDesktopHelper.previous.log");
+					_startNewFile();
+				} else if(_writer.BaseStream.Length > MaxFileBytes) {
+					_startNewFile();
 				}
-				if(new System.IO.FileInfo(_filePath).Length > MaxFileBytes) return;
-				System.IO.File.AppendAllText(_filePath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + line + Environment.NewLine);
+				_writer.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + line);
 			} catch(Exception) {
 				_fileFailed = true; // logging must never break the app
 			}
+		}
+
+		private static void _startNewFile() {
+			if(_writer != null) {
+				_writer.Dispose();
+				_writer = null;
+			}
+			try {
+				if(System.IO.File.Exists(_filePath)) {
+					if(System.IO.File.Exists(_previousFilePath)) System.IO.File.Delete(_previousFilePath);
+					System.IO.File.Move(_filePath, _previousFilePath);
+				}
+			} catch(Exception) {
+				// e.g. the previous log is open in an editor which locks it: then the log just starts over
+			}
+			var stream = new System.IO.FileStream(_filePath, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+			_writer = new System.IO.StreamWriter(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
 		}
 
 		// Returns a snapshot, so callers can safely enumerate while other threads keep logging

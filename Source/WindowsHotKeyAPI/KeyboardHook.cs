@@ -20,6 +20,8 @@ namespace WindowsVirtualDesktopHelper.WindowsHotKeyAPI {
 		[DllImport("user32.dll")]
 		private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
+		private const uint MOD_NOREPEAT = 0x4000;
+
 		/// <summary>
 		/// Represents the window that is used internally to get the messages.
 		/// </summary>
@@ -42,7 +44,7 @@ namespace WindowsVirtualDesktopHelper.WindowsHotKeyAPI {
 				if (m.Msg == WM_HOTKEY) {
 					// get the keys.
 					Keys key = (Keys)(((int)m.LParam >> 16) & 0xFFFF);
-					ModifierKeys modifier = (ModifierKeys)((int)m.LParam & 0xFFFF);
+					ModifierKeys modifier = (ModifierKeys)((int)m.LParam & 0x000F); // only Alt, Ctrl, Shift, Win (not MOD_NOREPEAT)
 
 					// invoke the event to notify the parent.
 					if (KeyPressed != null)
@@ -82,8 +84,9 @@ namespace WindowsVirtualDesktopHelper.WindowsHotKeyAPI {
 			// increment the counter.
 			_currentId = _currentId + 1;
 
-			// register the hot key.
-			if (!RegisterHotKey(_window.Handle, _currentId, (uint)modifier, (uint)key))
+			// register the hot key. MOD_NOREPEAT: holding the keys down runs the action once, instead of queuing up
+			// a switch per keyboard auto-repeat
+			if (!RegisterHotKey(_window.Handle, _currentId, (uint)modifier | MOD_NOREPEAT, (uint)key))
 				throw new InvalidOperationException($"Couldn’t register the hot key {modifier} + {key}.");
 		}
 

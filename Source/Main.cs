@@ -14,6 +14,11 @@ namespace WindowsVirtualDesktopHelper {
 				return;
 			}
 
+			// An exception on a background thread ends the process: at least leave a trace in the log
+			AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+				try { Util.Logging.WriteLine("Fatal: unhandled exception: " + e.ExceptionObject); } catch (Exception) { }
+			};
+
 			// Catch all exceptions in global exception handler
 			try {
 				// Settings
@@ -24,7 +29,8 @@ namespace WindowsVirtualDesktopHelper {
 				// Start app
 				using (Mutex mutex = new Mutex(false, "Mutex/WindowsVirtualDesktopHelper")) {
 					if (Settings.GetBool("debug.singleInstance") && !mutex.WaitOne(0)) {
-						MessageBox.Show("WindowsVirtualDesktopHelper is already running.", "Error", MessageBoxButtons.OK);
+						// Started again (Start menu, a pinned taskbar icon, ...): open the running app's panel
+						if (!ControlServer.ShowPanelOfRunningApp()) MessageBox.Show("WindowsVirtualDesktopHelper is already running.", "Error", MessageBoxButtons.OK);
 						return;
 					}
 
