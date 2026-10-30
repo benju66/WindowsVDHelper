@@ -6,7 +6,7 @@ namespace WindowsVirtualDesktopHelper.Util {
 
 	/// <summary>
 	/// Raises <see cref="Requested"/> when the user Ctrl + right-clicks the title bar of any window (instead of
-	/// Windows' own title bar menu). Uses a low level mouse hook; the callback must be very fast, so it only looks
+	/// Windows' own title bar menu). Uses a low level mouse hook (on the hook thread); the callback must be very fast, so it only looks
 	/// further at right-clicks with Ctrl held, and asks the window with WM_NCHITTEST (with a short timeout) whether
 	/// the click is on its title bar. Both the button down and up of such a click are swallowed.
 	/// </summary>
@@ -27,13 +27,15 @@ namespace WindowsVirtualDesktopHelper.Util {
 		public bool Start() {
 			if (_hook != IntPtr.Zero) return true;
 			_proc = HookCallback;
-			_hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
+			// Installed on the hook thread, which then receives the callbacks (see HookThread)
+			HookThread.Invoke(() => _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0));
 			return _hook != IntPtr.Zero;
 		}
 
 		public void Stop() {
-			if (_hook != IntPtr.Zero) UnhookWindowsHookEx(_hook);
+			var hook = _hook;
 			_hook = IntPtr.Zero;
+			if (hook != IntPtr.Zero) HookThread.Invoke(() => UnhookWindowsHookEx(hook));
 		}
 
 		public void Dispose() {

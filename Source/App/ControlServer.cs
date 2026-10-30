@@ -14,8 +14,9 @@ namespace WindowsVirtualDesktopHelper {
 
 	/// <summary>
 	/// Lets other programs control the app (the Command Palette extension, scripts, AutoHotkey, Stream Deck, ...)
-	/// through a named pipe. Only the current Windows user can connect (the pipe's ACL), and the pipe name contains
-	/// the user's SID, so other users on the same machine have their own.
+	/// through a named pipe. Only the current Windows user can connect, and only locally (the pipe's ACL), and the
+	/// pipe name contains the user's SID and the session, so other users (and other sessions of the same user) on the
+	/// same machine have their own. Clients are served in parallel, so a slow or misbehaving one never blocks others.
 	///
 	/// Protocol: the client sends one line of JSON, e.g. {"cmd":"switch","desktop":2}, and gets one line back:
 	/// {"ok":true,...} or {"ok":false,"error":"..."}. Desktop numbers are 0-based, window handles are numbers.
@@ -25,8 +26,13 @@ namespace WindowsVirtualDesktopHelper {
 	public static class ControlServer {
 
 		public static string PipeName {
-			get { return "WindowsVDHelper-" + WindowsIdentity.GetCurrent().User.Value; }
+			get { return "WindowsVDHelper-" + WindowsIdentity.GetCurrent().User.Value + "-" + System.Diagnostics.Process.GetCurrentProcess().SessionId; }
 		}
+
+		// How long a request may wait for the UI thread (where all the work runs) before the client is told the app is busy
+		private const int UIThreadTimeoutMs = 5000;
+		// How long a client may take to send its request or to read the answer
+		private const int ClientTimeoutMs = 3000;
 
 		private static Thread _thread;
 
@@ -47,22 +53,48 @@ namespace WindowsVirtualDesktopHelper {
 		private static void _serve() {
 			var security = new PipeSecurity();
 			security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User, PipeAccessRights.FullControl, AccessControlType.Allow));
+			// Local programs only: the same user connecting from another machine (over the network) is refused
+			security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+			var createFailed = false;
 			while (true) {
+				NamedPipeServerStream server;
 				try {
-					using (var server = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 64 * 1024, 64 * 1024, security)) {
-						server.WaitForConnection();
-						var reader = new StreamReader(server, new UTF8Encoding(false));
-						var readTask = reader.ReadLineAsync();
-						if (!readTask.Wait(3000)) continue; // a client which never sends anything must not block others
-						var response = _handle(readTask.Result);
-						var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
-						server.Write(bytes, 0, bytes.Length);
-						server.Flush();
-						try { server.WaitForPipeDrain(); } catch (IOException) { }
-					}
+					server = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 64 * 1024, 64 * 1024, security);
+					createFailed = false;
+				} catch (Exception e) {
+					// Logged once, not on every retry
+					if (!createFailed) Util.Logging.WriteLine("ControlServer: Error: could not create the pipe: " + e.Message);
+					createFailed = true;
+					Thread.Sleep(5000);
+					continue;
+				}
+				try {
+					server.WaitForConnection();
 				} catch (Exception e) {
 					Util.Logging.WriteLine("ControlServer: Error: " + e.Message);
-					Thread.Sleep(500);
+					server.Dispose();
+					continue;
+				}
+				// Each client on its own task, while the loop already waits for the next one
+				Task.Run(() => _serveClient(server));
+			}
+		}
+
+		private static async Task _serveClient(NamedPipeServerStream server) {
+			using (server) {
+				try {
+					var reader = new StreamReader(server, new UTF8Encoding(false));
+					var readTask = reader.ReadLineAsync();
+					if (await Task.WhenAny(readTask, Task.Delay(ClientTimeoutMs)) != readTask) return; // never sent anything
+					var response = _handle(await readTask);
+					var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
+					var writeTask = server.WriteAsync(bytes, 0, bytes.Length);
+					if (await Task.WhenAny(writeTask, Task.Delay(ClientTimeoutMs)) != writeTask) return; // never reads the answer
+					await writeTask;
+				} catch (IOException) {
+					// the client went away
+				} catch (Exception e) {
+					Util.Logging.WriteLine("ControlServer: Error: " + e.Message);
 				}
 			}
 		}
@@ -72,12 +104,15 @@ namespace WindowsVirtualDesktopHelper {
 			try {
 				if (string.IsNullOrWhiteSpace(line)) throw new Exception("empty request");
 				var request = json.Deserialize<Dictionary<string, object>>(line);
-				// Everything runs on the UI thread, like the tray menu and hotkeys
+				// Everything runs on the UI thread, like the tray menu and hotkeys. Posted rather than Invoke'd, so a
+				// busy UI thread makes this request fail after a while instead of hanging the client forever
 				object result = null;
 				Exception error = null;
-				App.Instance.AppForm.Invoke((Action)(() => {
-					try { result = _run(request); } catch (Exception e) { error = e; }
+				var done = new ManualResetEventSlim(false); // not disposed: the UI thread may still set it after a timeout
+				App.Instance.AppForm.BeginInvoke((Action)(() => {
+					try { result = _run(request); } catch (Exception e) { error = e; } finally { done.Set(); }
 				}));
+				if (!done.Wait(UIThreadTimeoutMs)) throw new Exception("the app is busy, try again");
 				if (error != null) throw error;
 				var response = new Dictionary<string, object> { { "ok", true } };
 				var resultDict = result as Dictionary<string, object>;
@@ -102,14 +137,16 @@ namespace WindowsVirtualDesktopHelper {
 						return new Dictionary<string, object> { { "window", hwnd == IntPtr.Zero ? null : _windowInfo(hwnd) } };
 					}
 				case "switch":
-					app.SwitchToDesktop(_int(request, "desktop"));
+					if (!app.SwitchToDesktop(_int(request, "desktop"))) throw new Exception("could not switch to that desktop");
 					return null;
 				case "focus":
 					app.FocusWindow(_hwnd(request));
 					return null;
 				case "move":
-					if (request.ContainsKey("follow")) app.MoveWindowToDesktop(_hwnd(request), _int(request, "desktop"), _bool(request, "follow"));
-					else app.MoveWindowToDesktop(_hwnd(request), _int(request, "desktop"));
+					var moved = request.ContainsKey("follow")
+						? app.MoveWindowToDesktop(_hwnd(request), _int(request, "desktop"), _bool(request, "follow"))
+						: app.MoveWindowToDesktop(_hwnd(request), _int(request, "desktop"));
+					if (!moved) throw new Exception("the window could not be moved to that desktop");
 					return null;
 				case "movenew":
 					app.MoveWindowToNewDesktop(_hwnd(request));
@@ -241,12 +278,15 @@ namespace WindowsVirtualDesktopHelper {
 		// Sends a request to the running app, returns the response line (or throws if the app isn't running)
 		public static string Send(Dictionary<string, object> request, int timeoutMs = 3000) {
 			var json = new JavaScriptSerializer();
-			using (var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut)) {
+			using (var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous)) {
 				client.Connect(timeoutMs);
 				var bytes = new UTF8Encoding(false).GetBytes(json.Serialize(request) + "\n");
 				client.Write(bytes, 0, bytes.Length);
 				client.Flush();
-				return new StreamReader(client, new UTF8Encoding(false)).ReadLine();
+				// The answer can take up to the server's UI thread timeout: wait a bit longer, but never forever
+				var readTask = new StreamReader(client, new UTF8Encoding(false)).ReadLineAsync();
+				if (!readTask.Wait(UIThreadTimeoutMs + timeoutMs)) throw new TimeoutException("the app did not answer");
+				return readTask.Result;
 			}
 		}
 

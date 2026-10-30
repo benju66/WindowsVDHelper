@@ -96,6 +96,13 @@ namespace WindowsVirtualDesktopHelper {
 		#region Virtual Desktop Methods
 
 		public void LoadVDAPI() {
+			// Started at logon before explorer is up? Then wait for it, and give it a moment to set up its virtual
+			// desktop service once the taskbar appears (a failed load can't be retried, see the implementations'
+			// static DesktopManager constructors)
+			if(Util.OS.WaitForShell(60000)) {
+				Util.Logging.WriteLine("App: waited for the shell to start");
+				System.Threading.Thread.Sleep(3000);
+			}
 			App.DetectedVDImplementation = VirtualDesktopAPI.Loader.GetImplementationForOS();
 			this.VDAPI = VirtualDesktopAPI.Loader.LoadImplementationWithFallback(App.DetectedVDImplementation);
 		}
@@ -296,9 +303,15 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// Set while a check for a notification is posted but hasn't run yet: a switch raises several notifications at
+		// once (current desktop changed, desktop switched), and one check covers them all
+		private int _vdNotificationCheckPending = 0;
+
 		private void _onVDNotification(object sender, EventArgs e) {
+			if(System.Threading.Interlocked.Exchange(ref _vdNotificationCheckPending, 1) == 1) return;
 			// We are inside a call from the shell: never call back into it synchronously, post the work instead
-			_postToUI(() => {
+			var posted = _postToUI(() => {
+				_vdNotificationCheckPending = 0; // a notification from now on needs a check of its own
 				try {
 					_checkForDesktopSwitch(true);
 					_checkForDesktopCountChange();
@@ -306,6 +319,7 @@ namespace WindowsVirtualDesktopHelper {
 					Util.Logging.WriteLine("App: Error: handling shell notification: " + ex.Message);
 				}
 			});
+			if(!posted) _vdNotificationCheckPending = 0;
 		}
 
 		// Called when explorer.exe (re)starts, see AppForm.WndProc (TaskbarCreated)
@@ -326,13 +340,16 @@ namespace WindowsVirtualDesktopHelper {
 			UIUpdate();
 		}
 
-		private void _postToUI(Action action) {
+		// Returns false if the action could not be posted (and will never run)
+		private bool _postToUI(Action action) {
 			try {
-				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return;
+				if(this.AppForm == null || !this.AppForm.IsHandleCreated || this.AppForm.IsDisposed) return false;
 				this.AppForm.BeginInvoke(action);
+				return true;
 			} catch(Exception e) {
 				// e.g. the form is being closed while the app exits
 				Util.Logging.WriteLine("App: Error: could not post to UI thread: " + e.Message);
+				return false;
 			}
 		}
 
@@ -411,7 +428,8 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
-		public void SwitchToDesktop(int number) {
+		// Returns false if the switch failed (e.g. there is no such desktop), so callers like the control pipe can say so
+		public bool SwitchToDesktop(int number) {
 			// Explicitly store the last focused window
 			try {
 				_storeLastWinFocused();
@@ -421,9 +439,10 @@ namespace WindowsVirtualDesktopHelper {
 			// We try the virtual desktop implementation API
 			try {
 				VDAPI.SwitchToDesktop(number);
+				return true;
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: SwitchToDesktop (VDAPI.SwitchToDesktop(number)): " + e.Message);
-				return;
+				return false;
 			}
 		}
 
@@ -628,6 +647,11 @@ namespace WindowsVirtualDesktopHelper {
 				// If the desktop number can't be determined we skip, instead of filing this window under desktop 0
 				int displayNumber;
 				if(!_tryGetVDDisplayNumber(out displayNumber)) return;
+				// During a switch the current desktop changes before Windows activates a window there, so for a moment
+				// the previous desktop's window is still in front: it must not be filed under the new desktop (restoring
+				// it later would switch straight back to its desktop). Checked after reading the number, so a switch in
+				// between can't slip through either
+				if(Util.OS.IsWindowOnCurrentDesktop(hWnd) != true) return;
 				lock(_focusLock) {
 					VDDToLastFocusedWin[displayNumber] = hWnd;
 				}
@@ -642,9 +666,17 @@ namespace WindowsVirtualDesktopHelper {
 			lock(_focusLock) {
 				if(!VDDToLastFocusedWin.TryGetValue(displayNumber, out lastWindowHandle)) return;
 			}
-			if(Util.OS.IsWindow(lastWindowHandle)) {
-				Util.OS.SetForegroundWindow(lastWindowHandle);
+			if(!Util.OS.IsWindow(lastWindowHandle)) return;
+			// Bringing a window to the front switches to its desktop, so only if it is (still) on this one: it may
+			// have been moved since. Otherwise the desktop jumped straight back after a switch
+			if(Util.OS.IsWindowOnCurrentDesktop(lastWindowHandle) != true) {
+				Util.Logging.WriteLine($"App: not restoring the focus to \"{Util.OS.GetHandleWndName(lastWindowHandle)}\", it is not on desktop {displayNumber + 1}");
+				lock(_focusLock) {
+					VDDToLastFocusedWin.Remove(displayNumber);
+				}
+				return;
 			}
+			Util.OS.SetForegroundWindow(lastWindowHandle);
 		}
 
 		private bool _tryGetVDDisplayNumber(out int displayNumber) {
@@ -692,9 +724,11 @@ namespace WindowsVirtualDesktopHelper {
 			if(string.IsNullOrWhiteSpace(Util.OS.GetHandleWndName(hwnd))) return false;
 			uint pid;
 			Util.OS.GetWindowThreadProcessId(hwnd, out pid);
-			if(pid == (uint)Process.GetCurrentProcess().Id) return false; // our own overlays/forms
+			if(pid == _ownProcessId) return false; // our own overlays/forms
 			return true;
 		}
+
+		private static readonly uint _ownProcessId = (uint)Process.GetCurrentProcess().Id;
 
 		// The window the user is working in: the foreground window (for hotkeys), or the last app window
 		// that had the focus (for the tray menu, where the taskbar has the focus)
@@ -718,21 +752,22 @@ namespace WindowsVirtualDesktopHelper {
 			MoveWindowToDesktop(hwnd, target);
 		}
 
-		public void MoveWindowToDesktop(IntPtr hwnd, int index) {
-			MoveWindowToDesktop(hwnd, index, Settings.GetBool("feature.moveWindow.follow"));
+		public bool MoveWindowToDesktop(IntPtr hwnd, int index) {
+			return MoveWindowToDesktop(hwnd, index, Settings.GetBool("feature.moveWindow.follow"));
 		}
 
-		public void MoveWindowToDesktop(IntPtr hwnd, int index, bool follow) {
+		// Returns false if the window was not moved (no window, no such desktop, or the API failed)
+		public bool MoveWindowToDesktop(IntPtr hwnd, int index, bool follow) {
 			var ext = VDAPIExtended;
-			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return; }
-			if(hwnd == IntPtr.Zero) return;
-			if(index < 0 || index >= this.GetVDDisplayCount()) return;
+			if(ext == null) { Util.Logging.WriteLine("App: moving windows is not supported on this Windows version"); return false; }
+			if(hwnd == IntPtr.Zero) return false;
+			if(index < 0 || index >= this.GetVDDisplayCount()) return false;
 			try {
 				ext.MoveWindowToDesktop(hwnd, index);
 				Util.Logging.WriteLine($"App: moved window \"{Util.OS.GetHandleWndName(hwnd)}\" to desktop {index + 1}");
 			} catch(Exception e) {
 				Util.Logging.WriteLine("App: Error: could not move window: " + e.Message);
-				return;
+				return false;
 			}
 			if(follow) {
 				SwitchToDesktop(index);
@@ -743,6 +778,7 @@ namespace WindowsVirtualDesktopHelper {
 				timer.Tick += (s, e) => { timer.Stop(); timer.Dispose(); if(Util.OS.IsWindow(hwnd)) Util.OS.SetForegroundWindow(hwnd); };
 				timer.Start();
 			}
+			return true;
 		}
 
 		// Switches to the window's desktop (if needed) and brings the window to the front
@@ -1390,7 +1426,7 @@ namespace WindowsVirtualDesktopHelper {
 				} else if(action.StartsWith("movewindowtodesktop")) {
 					int target;
 					if(!int.TryParse(action.Replace("movewindowtodesktop", ""), out target)) throw new Exception("invalid desktop number");
-					this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1);
+					if(!this.MoveWindowToDesktop(this.GetActiveUserWindow(true), target - 1)) throw new Exception("the window could not be moved");
 					return null;
 				} else if(action == "showwindowmenu") {
 					this.ShowWindowMenu(this.GetActiveUserWindow(true));
@@ -1413,7 +1449,7 @@ namespace WindowsVirtualDesktopHelper {
 				} else if(action.StartsWith("desktop")) {
 					var desktopNumber = 0;
 					if(int.TryParse(action.Replace("desktop", ""), out desktopNumber)) {
-						this.SwitchToDesktop(desktopNumber - 1);
+						if(!this.SwitchToDesktop(desktopNumber - 1)) throw new Exception("could not switch to desktop " + desktopNumber);
 						return null;
 					} else {
 						throw new Exception("invalid desktop number");

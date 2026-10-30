@@ -76,6 +76,10 @@ internal sealed partial class GoToWindowFallback : FallbackCommandItem
     private readonly FocusCommand _command;
     private string _query = string.Empty;
 
+    // Match runs on Command Palette's thread (typing) and on the cache's refresh thread: one at a time, so the shown
+    // title and the window Enter goes to always come from the same match
+    private readonly object _matchGate = new();
+
     public GoToWindowFallback()
         : this(new FocusCommand())
     {
@@ -98,31 +102,34 @@ internal sealed partial class GoToWindowFallback : FallbackCommandItem
 
     private void Match(string query)
     {
-        try
+        lock (_matchGate)
         {
-            if (query.Length < 2)
+            try
+            {
+                if (query.Length < 2)
+                {
+                    Hide();
+                    return;
+                }
+
+                var (windows, status) = WindowCache.Get();
+                var best = Best(windows, query);
+                if (best is null || status is null)
+                {
+                    Hide();
+                    return;
+                }
+
+                _command.Hwnd = best.Hwnd;
+                _command.Name = "Go to window";
+                Title = $"Go to {best.Title}";
+                Subtitle = $"{best.App}  ·  {Items.Where(status, best)}";
+                Icon = Items.WindowIcon(best);
+            }
+            catch (Exception)
             {
                 Hide();
-                return;
             }
-
-            var (windows, status) = WindowCache.Get();
-            var best = Best(windows, query);
-            if (best is null || status is null)
-            {
-                Hide();
-                return;
-            }
-
-            _command.Hwnd = best.Hwnd;
-            _command.Name = "Go to window";
-            Title = $"Go to {best.Title}";
-            Subtitle = $"{best.App}  ·  {Items.Where(status, best)}";
-            Icon = Items.WindowIcon(best);
-        }
-        catch (Exception)
-        {
-            Hide();
         }
     }
 

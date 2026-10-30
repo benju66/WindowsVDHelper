@@ -581,6 +581,8 @@ namespace WindowsVirtualDesktopHelper {
 			if(str == null) return null;
 			str = str.Replace("\\", "\\\\");
 			str = str.Replace("\n", "\\n");
+			str = str.Replace("\r", "\\r"); // a raw \r would end the line in the config file and break the setting
+			str = str.Replace("\t", "\\t");
 			str = str.Replace("\"", "\\\"");
 			var escaped = new System.Text.StringBuilder();
 			foreach(char c in str) {

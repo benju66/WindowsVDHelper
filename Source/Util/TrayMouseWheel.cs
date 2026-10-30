@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace WindowsVirtualDesktopHelper.Util {
@@ -10,7 +11,8 @@ namespace WindowsVirtualDesktopHelper.Util {
 	/// Raises <see cref="Scrolled"/> when the mouse wheel is turned over one of the given tray icons.
 	/// NotifyIcon has no wheel events, so this uses a low level mouse hook and compares the cursor position
 	/// with the icons' screen rectangles (Shell_NotifyIconGetRect). The hook callback must be very fast
-	/// (Windows removes slow low level hooks), so it only looks at wheel messages and the handler is posted.
+	/// (Windows removes slow low level hooks), so it runs on the hook thread, only looks at wheel messages and the
+	/// handler is posted to the UI thread.
 	/// </summary>
 	public class TrayMouseWheel : IDisposable {
 
@@ -21,7 +23,7 @@ namespace WindowsVirtualDesktopHelper.Util {
 		private readonly NotifyIcon[] _icons;
 		private IntPtr _hook = IntPtr.Zero;
 		private LowLevelMouseProc _proc; // must be kept alive while hooked
-		private List<RECT> _rects = new List<RECT>();
+		private volatile List<RECT> _rects = new List<RECT>(); // replaced as a whole, read by the hook thread
 		private int _rectsTick = 0;
 
 		public TrayMouseWheel(Control uiThread, params NotifyIcon[] icons) {
@@ -32,13 +34,16 @@ namespace WindowsVirtualDesktopHelper.Util {
 		public bool Start() {
 			if (_hook != IntPtr.Zero) return true;
 			_proc = HookCallback;
-			_hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
+			// Installed on the hook thread, which then receives the callbacks (see HookThread)
+			HookThread.Invoke(() => _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0));
+			_refreshRectsAsync();
 			return _hook != IntPtr.Zero;
 		}
 
 		public void Stop() {
-			if (_hook != IntPtr.Zero) UnhookWindowsHookEx(_hook);
+			var hook = _hook;
 			_hook = IntPtr.Zero;
+			if (hook != IntPtr.Zero) HookThread.Invoke(() => UnhookWindowsHookEx(hook));
 		}
 
 		public void Dispose() {
@@ -63,11 +68,9 @@ namespace WindowsVirtualDesktopHelper.Util {
 		}
 
 		private bool _isOverIcon(POINT pt) {
-			// The icon positions rarely change, so they are cached for a few seconds
-			if (unchecked(Environment.TickCount - _rectsTick) > 3000 || _rects.Count == 0) {
-				_rects = _getIconRects();
-				_rectsTick = Environment.TickCount;
-			}
+			// The icon positions rarely change, so they are cached for a few seconds. Finding them asks explorer, which
+			// can be busy, so an outdated list is refreshed in the background instead of here (the mouse waits for us)
+			if (unchecked(Environment.TickCount - _rectsTick) > 3000) _refreshRectsAsync();
 			foreach (var r in _rects) {
 				if (pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom) return true;
 			}
@@ -86,6 +89,22 @@ namespace WindowsVirtualDesktopHelper.Util {
 			} catch (Exception) {
 				return null;
 			}
+		}
+
+		private int _refreshing = 0;
+
+		private void _refreshRectsAsync() {
+			if (Interlocked.Exchange(ref _refreshing, 1) == 1) return;
+			ThreadPool.QueueUserWorkItem(_ => {
+				try {
+					_rects = _getIconRects();
+					_rectsTick = Environment.TickCount;
+				} catch (Exception) {
+					// keep the previous positions
+				} finally {
+					_refreshing = 0;
+				}
+			});
 		}
 
 		private List<RECT> _getIconRects() {

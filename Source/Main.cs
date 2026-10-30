@@ -14,6 +14,11 @@ namespace WindowsVirtualDesktopHelper {
 				return;
 			}
 
+			// An exception on a background thread ends the process: at least leave a trace in the log
+			AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+				try { Util.Logging.WriteLine("Fatal: unhandled exception: " + e.ExceptionObject); } catch (Exception) { }
+			};
+
 			// Catch all exceptions in global exception handler
 			try {
 				// Settings

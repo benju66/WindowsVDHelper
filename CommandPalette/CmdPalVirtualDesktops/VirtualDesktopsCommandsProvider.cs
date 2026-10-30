@@ -58,27 +58,33 @@ public sealed partial class VirtualDesktopsCommandsProvider : CommandProvider, I
             {
                 return _cached;
             }
+        }
 
-            var items = new List<ICommandItem>(_fixed);
-            try
+        // Asked outside the lock: the helper may take a while to answer, and other calls must not queue up behind it
+        var items = new List<ICommandItem>(_fixed);
+        var signature = string.Empty;
+        try
+        {
+            var status = Helper.Status();
+            signature = Signature(status);
+            foreach (var desktop in status.Desktops)
             {
-                var status = Helper.Status();
-                _desktopsSignature = Signature(status);
-                foreach (var desktop in status.Desktops)
+                var index = desktop.Index;
+                items.Add(new CommandItem(TopLevel($"vdh.switch.{index}", "Switch", Glyphs.Desktop, () => Helper.Switch(index)))
                 {
-                    var index = desktop.Index;
-                    items.Add(new CommandItem(TopLevel($"vdh.switch.{index}", "Switch", Glyphs.Desktop, () => Helper.Switch(index)))
-                    {
-                        Title = $"Switch to {desktop.Name}",
-                        Subtitle = $"Virtual desktop {index + 1}",
-                    });
-                }
+                    Title = $"Switch to {desktop.Name}",
+                    Subtitle = $"Virtual desktop {index + 1}",
+                });
             }
-            catch (Exception)
-            {
-                // Helper not running: only the fixed commands (they explain how to start it)
-            }
+        }
+        catch (Exception)
+        {
+            // Helper not running: only the fixed commands (they explain how to start it)
+        }
 
+        lock (_gate)
+        {
+            _desktopsSignature = signature;
             _cached = [.. items];
             return _cached;
         }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
@@ -23,7 +24,13 @@ internal sealed class HelperNotRunningException(string message, Exception? inner
 /// </summary>
 internal static class Helper
 {
-    private static readonly string PipeName = "WindowsVDHelper-" + WindowsIdentity.GetCurrent().User!.Value;
+    // Per user and session, like the helper's (ControlServer.PipeName)
+    private static readonly string PipeName = "WindowsVDHelper-" + WindowsIdentity.GetCurrent().User!.Value + "-" + Process.GetCurrentProcess().SessionId;
+
+    private const int ConnectTimeoutMs = 1500;
+
+    // A bit longer than the helper waits for its UI thread (it then answers "busy"), so a hung helper never hangs us
+    private const int AnswerTimeoutMs = 8000;
 
     public static StatusInfo Status()
     {
@@ -92,7 +99,7 @@ internal static class Helper
             var path = File.Exists(file) ? File.ReadAllText(file).Trim() : null;
             return path is not null && File.Exists(path) ? path : null;
         }
-        catch (IOException)
+        catch (Exception)
         {
             return null;
         }
@@ -135,21 +142,8 @@ internal static class Helper
             writer.WriteEndObject();
         }
 
-        string? line;
-        try
-        {
-            using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
-            pipe.Connect(1500);
-            buffer.WriteByte((byte)'\n');
-            pipe.Write(buffer.ToArray());
-            pipe.Flush();
-            using var reader = new StreamReader(pipe, new UTF8Encoding(false));
-            line = reader.ReadLine();
-        }
-        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
-        {
-            throw new HelperNotRunningException("Windows Virtual Desktop Helper isn't running", ex);
-        }
+        buffer.WriteByte((byte)'\n');
+        var line = Task.Run(() => Exchange(buffer.ToArray())).GetAwaiter().GetResult();
 
         if (string.IsNullOrEmpty(line))
         {
@@ -157,7 +151,7 @@ internal static class Helper
         }
 
         var doc = JsonDocument.Parse(line);
-        if (!doc.RootElement.GetProperty("ok").GetBoolean())
+        if (!doc.RootElement.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True)
         {
             var error = doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "unknown error";
             doc.Dispose();
@@ -165,5 +159,36 @@ internal static class Helper
         }
 
         return doc;
+    }
+
+    // Sends the request and reads the answer line, with a time limit on each step
+    private static async Task<string?> Exchange(byte[] request)
+    {
+        using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        try
+        {
+            await pipe.ConnectAsync(ConnectTimeoutMs).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+        {
+            throw new HelperNotRunningException("Windows Virtual Desktop Helper isn't running", ex);
+        }
+
+        using var timeout = new CancellationTokenSource(AnswerTimeoutMs);
+        try
+        {
+            await pipe.WriteAsync(request, timeout.Token).ConfigureAwait(false);
+            await pipe.FlushAsync(timeout.Token).ConfigureAwait(false);
+            using var reader = new StreamReader(pipe, new UTF8Encoding(false));
+            return await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw new InvalidOperationException("Windows Virtual Desktop Helper is busy, try again");
+        }
+        catch (IOException ex)
+        {
+            throw new HelperNotRunningException("Windows Virtual Desktop Helper isn't running", ex);
+        }
     }
 }
