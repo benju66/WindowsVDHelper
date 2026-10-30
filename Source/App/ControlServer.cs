@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
+using Microsoft.Win32.SafeHandles;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -50,16 +52,25 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
+		// Pipe squatting: the pipe namespace is shared by all users of the machine, so another account's process could
+		// create a pipe with our name first, and our clients would then talk to it. So whenever none of our instances
+		// exists, the next one is created with FILE_FLAG_FIRST_PIPE_INSTANCE, which fails if the name is taken: then we
+		// don't serve (and retry later). While one of our instances exists, the name is ours. (Clients check the pipe's
+		// owner as well, see Send and the Command Palette extension.) The instances are counted under a lock.
+		private static readonly object _instancesLock = new object();
+		private static int _liveInstances = 0;
+
 		private static void _serve() {
 			var security = new PipeSecurity();
 			security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User, PipeAccessRights.FullControl, AccessControlType.Allow));
 			// Local programs only: the same user connecting from another machine (over the network) is refused
 			security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+			var securityDescriptor = security.GetSecurityDescriptorBinaryForm();
 			var createFailed = false;
 			while (true) {
 				NamedPipeServerStream server;
 				try {
-					server = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 64 * 1024, 64 * 1024, security);
+					server = _createInstance(securityDescriptor);
 					createFailed = false;
 				} catch (Exception e) {
 					// Logged once, not on every retry
@@ -72,7 +83,7 @@ namespace WindowsVirtualDesktopHelper {
 					server.WaitForConnection();
 				} catch (Exception e) {
 					Util.Logging.WriteLine("ControlServer: Error: " + e.Message);
-					server.Dispose();
+					_release(server);
 					continue;
 				}
 				// Each client on its own task, while the loop already waits for the next one
@@ -80,24 +91,84 @@ namespace WindowsVirtualDesktopHelper {
 			}
 		}
 
-		private static async Task _serveClient(NamedPipeServerStream server) {
-			using (server) {
+		private static NamedPipeServerStream _createInstance(byte[] securityDescriptor) {
+			lock (_instancesLock) {
+				var first = _liveInstances == 0;
+				var descriptor = GCHandle.Alloc(securityDescriptor, GCHandleType.Pinned);
+				SafePipeHandle handle;
 				try {
-					var reader = new StreamReader(server, new UTF8Encoding(false));
-					var readTask = reader.ReadLineAsync();
-					if (await Task.WhenAny(readTask, Task.Delay(ClientTimeoutMs)) != readTask) return; // never sent anything
-					var response = _handle(await readTask);
-					var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
-					var writeTask = server.WriteAsync(bytes, 0, bytes.Length);
-					if (await Task.WhenAny(writeTask, Task.Delay(ClientTimeoutMs)) != writeTask) return; // never reads the answer
-					await writeTask;
-				} catch (IOException) {
-					// the client went away
-				} catch (Exception e) {
-					Util.Logging.WriteLine("ControlServer: Error: " + e.Message);
+					var attributes = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), lpSecurityDescriptor = descriptor.AddrOfPinnedObject(), bInheritHandle = 0 };
+					var openMode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0);
+					handle = CreateNamedPipe(@"\\.\pipe\" + PipeName, openMode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, ref attributes);
+				} finally {
+					descriptor.Free();
 				}
+				if (handle.IsInvalid) {
+					var error = Marshal.GetLastWin32Error();
+					handle.Dispose();
+					if (first && (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY)) throw new Exception("the pipe name is already used by another process, the control channel is off until it is free");
+					throw new System.ComponentModel.Win32Exception(error);
+				}
+				_liveInstances++;
+				return new NamedPipeServerStream(PipeDirection.InOut, true, false, handle);
 			}
 		}
+
+		private static void _release(NamedPipeServerStream server) {
+			lock (_instancesLock) {
+				try { server.Dispose(); } catch (Exception) { }
+				_liveInstances--;
+			}
+		}
+
+		private static async Task _serveClient(NamedPipeServerStream server) {
+			try {
+				var reader = new StreamReader(server, new UTF8Encoding(false));
+				var readTask = reader.ReadLineAsync();
+				if (await Task.WhenAny(readTask, Task.Delay(ClientTimeoutMs)) != readTask) return; // never sent anything
+				var response = _handle(await readTask);
+				var bytes = new UTF8Encoding(false).GetBytes(response + "\n");
+				var writeTask = server.WriteAsync(bytes, 0, bytes.Length);
+				if (await Task.WhenAny(writeTask, Task.Delay(ClientTimeoutMs)) != writeTask) return; // never reads the answer
+				await writeTask;
+			} catch (IOException) {
+				// the client went away
+			} catch (Exception e) {
+				Util.Logging.WriteLine("ControlServer: Error: " + e.Message);
+			} finally {
+				_release(server);
+			}
+		}
+
+		#region Native
+
+		[StructLayout(LayoutKind.Sequential)]
+		private struct SECURITY_ATTRIBUTES { public int nLength; public IntPtr lpSecurityDescriptor; public int bInheritHandle; }
+
+		private const uint PIPE_ACCESS_DUPLEX = 0x00000003;
+		private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+		private const uint FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000;
+		private const uint PIPE_TYPE_BYTE = 0x00000000, PIPE_READMODE_BYTE = 0x00000000, PIPE_WAIT = 0x00000000;
+		private const uint PIPE_REJECT_REMOTE_CLIENTS = 0x00000008;
+		private const uint PIPE_UNLIMITED_INSTANCES = 255;
+		private const int ERROR_ACCESS_DENIED = 5, ERROR_PIPE_BUSY = 231;
+
+		[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+		private static extern SafePipeHandle CreateNamedPipe(string name, uint openMode, uint pipeMode, uint maxInstances, uint outBufferSize, uint inBufferSize, uint defaultTimeout, ref SECURITY_ATTRIBUTES securityAttributes);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+
+		[DllImport("advapi32.dll", SetLastError = true)]
+		private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern bool CloseHandle(IntPtr handle);
+
+		#endregion
 
 		private static string _handle(string line) {
 			var json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
@@ -278,8 +349,10 @@ namespace WindowsVirtualDesktopHelper {
 		// Sends a request to the running app, returns the response line (or throws if the app isn't running)
 		public static string Send(Dictionary<string, object> request, int timeoutMs = 3000) {
 			var json = new JavaScriptSerializer();
-			using (var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous)) {
+			// Identification: the server may see who we are, but can never act as us (if the pipe were someone else's)
+			using (var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification)) {
 				client.Connect(timeoutMs);
+				_verifyServerIsCurrentUser(client);
 				var bytes = new UTF8Encoding(false).GetBytes(json.Serialize(request) + "\n");
 				client.Write(bytes, 0, bytes.Length);
 				client.Flush();
@@ -287,6 +360,27 @@ namespace WindowsVirtualDesktopHelper {
 				var readTask = new StreamReader(client, new UTF8Encoding(false)).ReadLineAsync();
 				if (!readTask.Wait(UIThreadTimeoutMs + timeoutMs)) throw new TimeoutException("the app did not answer");
 				return readTask.Result;
+			}
+		}
+
+		// Makes sure the process serving the pipe runs as the current user (see the note on pipe squatting above)
+		private static void _verifyServerIsCurrentUser(NamedPipeClientStream client) {
+			uint serverProcessId;
+			if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out serverProcessId)) throw new UnauthorizedAccessException("could not check the pipe's server");
+			var process = OpenProcess(0x1000, false, serverProcessId); // PROCESS_QUERY_LIMITED_INFORMATION
+			if (process == IntPtr.Zero) throw new UnauthorizedAccessException("the pipe is served by another user's process");
+			try {
+				IntPtr token;
+				if (!OpenProcessToken(process, 0x0008, out token)) throw new UnauthorizedAccessException("the pipe is served by another user's process"); // TOKEN_QUERY
+				try {
+					using (var identity = new WindowsIdentity(token)) {
+						if (identity.User != WindowsIdentity.GetCurrent().User) throw new UnauthorizedAccessException("the pipe is served by another user's process");
+					}
+				} finally {
+					CloseHandle(token);
+				}
+			} finally {
+				CloseHandle(process);
 			}
 		}
 

@@ -164,12 +164,18 @@ internal static class Helper
     // Sends the request and reads the answer line, with a time limit on each step
     private static async Task<string?> Exchange(byte[] request)
     {
-        using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        // CurrentUserOnly: only a pipe owned by us is accepted (another account's process could have created one with
+        // this name first). Identification: the server may see who we are, but can never act as us
+        using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, TokenImpersonationLevel.Identification);
         try
         {
             await pipe.ConnectAsync(ConnectTimeoutMs).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new InvalidOperationException("The Virtual Desktop Helper pipe belongs to another user's process, not connecting", ex);
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException)
         {
             throw new HelperNotRunningException("Windows Virtual Desktop Helper isn't running", ex);
         }
